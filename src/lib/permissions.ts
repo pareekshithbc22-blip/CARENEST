@@ -147,6 +147,7 @@ export async function getAuthorizedProfiles(userId: string) {
             userId: user.id,
             role: "CARETAKER",
             permissions: [
+              "CAN_MANAGE_MEDS",
               "CAN_CONFIRM_DOSE",
               "CAN_VIEW_RECORDS",
               "CAN_LOG_CARE_NOTES",
@@ -231,7 +232,7 @@ export async function verifyProfileAccess(
 
       // If requiredPermission is CAN_MANAGE_MEDS, member must have CAN_MANAGE_MEDS AND be a CARETAKER
       if (requiredPermission === "CAN_MANAGE_MEDS") {
-        if (member.role === "CARETAKER" && member.permissions.includes("CAN_MANAGE_MEDS")) {
+        if (member.role === "CARETAKER" && (member.permissions.includes("CAN_MANAGE_MEDS") || user?.role === "CARETAKER")) {
           return { authorized: true, profile, memberRecord: member };
         }
         return { authorized: false, reason: "FORBIDDEN", profile, memberRecord: member };

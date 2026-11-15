@@ -16,9 +16,7 @@ import {
   Phone,
   ShieldCheck,
   Heart,
-  FileText,
   AlertCircle,
-  CheckCircle2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -74,6 +72,7 @@ interface FamilyDashboardClientProps {
   };
   managedSeniors: ManagedSeniorSummary[];
   profile: any;
+  activeAge?: number | null;
   activeCaretaker: {
     name: string;
     phoneNumber?: string | null;
@@ -93,6 +92,7 @@ export function FamilyDashboardClient({
   adminUser,
   managedSeniors,
   profile,
+  activeAge,
   activeCaretaker,
   vitalsHistory = [],
   analytics,
@@ -222,18 +222,6 @@ export function FamilyDashboardClient({
   // Latest vital measurement from history
   const latestVital = vitalsHistory.length > 0 ? vitalsHistory[0] : null;
 
-  // Calculate age if birth date available
-  const calculateAge = (dobString?: string | null) => {
-    if (!dobString) return null;
-    const dob = new Date(dobString);
-    if (isNaN(dob.getTime())) return null;
-    const diffMs = Date.now() - dob.getTime();
-    const ageDate = new Date(diffMs);
-    return Math.abs(ageDate.getUTCFullYear() - 1970);
-  };
-
-  const activeAge = calculateAge(profile.dateOfBirth);
-
   return (
     <div className="min-h-screen bg-slate-50/70 pb-20">
       {/* ======================================================== */}
@@ -324,7 +312,16 @@ export function FamilyDashboardClient({
                 return (
                   <div
                     key={senior.id}
+                    role="button"
+                    tabIndex={0}
+                    data-testid={`senior-card-${senior.id}`}
                     onClick={() => handleSelectSenior(senior.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        handleSelectSenior(senior.id);
+                      }
+                    }}
                     className={`cursor-pointer rounded-2xl border-2 p-5 transition-all text-left flex flex-col justify-between ${
                       isSelected
                         ? "border-teal-600 bg-teal-50/70 shadow-md ring-3 ring-teal-500/20"

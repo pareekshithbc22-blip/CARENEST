@@ -51,18 +51,17 @@ export default function LoginPage() {
         const role = sessionData?.user?.role;
 
         if (callbackUrl && callbackUrl !== "/dashboard/family") {
-          router.push(callbackUrl);
+          window.location.href = callbackUrl;
         } else if (role === "SENIOR") {
-          router.push("/dashboard/senior");
+          window.location.href = "/dashboard/senior";
         } else if (role === "CARETAKER") {
-          router.push("/dashboard/caretaker");
+          window.location.href = "/dashboard/caretaker";
         } else {
-          router.push("/dashboard/family");
+          window.location.href = "/dashboard/family";
         }
       } catch {
-        router.push(callbackUrl || "/dashboard/family");
+        window.location.href = callbackUrl || "/dashboard/family";
       }
-      router.refresh();
     }
   };
 

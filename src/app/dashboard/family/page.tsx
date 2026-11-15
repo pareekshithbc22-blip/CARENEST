@@ -82,6 +82,13 @@ export default async function FamilyDashboardPage({
     redirect("/dashboard/family");
   }
 
+  const nowMs = Date.now();
+  const getAge = (dob: Date | null) => {
+    if (!dob) return null;
+    const diffMs = nowMs - dob.getTime();
+    return Math.abs(new Date(diffMs).getUTCFullYear() - 1970);
+  };
+
   // Fetch summary metadata for all senior patient profiles registered & managed by this administrator
   const managedSeniors = await Promise.all(
     profiles.map(async (p) => {
@@ -109,6 +116,7 @@ export default async function FamilyDashboardPage({
         name: p.name,
         preferredName: p.preferredName,
         dateOfBirth: p.dateOfBirth ? p.dateOfBirth.toISOString() : null,
+        age: getAge(p.dateOfBirth),
         gender: p.gender,
         bloodGroup: p.bloodGroup,
         allergies: p.allergies || [],
@@ -198,6 +206,7 @@ export default async function FamilyDashboardPage({
           }}
           managedSeniors={managedSeniors}
           profile={fullProfile}
+          activeAge={getAge(fullProfile.dateOfBirth)}
           activeCaretaker={activeCaretaker}
           vitalsHistory={parsedVitals}
           availableProfiles={profiles.map((p) => ({
