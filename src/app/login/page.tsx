@@ -51,17 +51,18 @@ export default function LoginPage() {
         const role = sessionData?.user?.role;
 
         if (callbackUrl && callbackUrl !== "/dashboard/family") {
-          window.location.href = callbackUrl;
+          router.push(callbackUrl);
         } else if (role === "SENIOR") {
-          window.location.href = "/dashboard/senior";
+          router.push("/dashboard/senior");
         } else if (role === "CARETAKER") {
-          window.location.href = "/dashboard/caretaker";
+          router.push("/dashboard/caretaker");
         } else {
-          window.location.href = "/dashboard/family";
+          router.push("/dashboard/family");
         }
       } catch {
-        window.location.href = callbackUrl || "/dashboard/family";
+        router.push(callbackUrl || "/dashboard/family");
       }
+      router.refresh();
     }
   };
 
@@ -80,7 +81,8 @@ export default function LoginPage() {
       setError("Invalid Senior PIN or patient identifier. Please verify your 4-digit PIN with your family guardian.");
       setLoading(false);
     } else {
-      window.location.href = "/dashboard/senior";
+      router.push("/dashboard/senior");
+      router.refresh();
     }
   };
 
