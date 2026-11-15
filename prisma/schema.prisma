@@ -1,0 +1,420 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  SENIOR
+  FAMILY
+  CARETAKER
+  ADMIN
+}
+
+enum CircleRole {
+  ADMIN
+  FAMILY_MEMBER
+  CARETAKER
+  SENIOR
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum DoseStatus {
+  SCHEDULED
+  TAKEN
+  MISSED
+  SKIPPED
+  UNCONFIRMED
+}
+
+enum ScheduleFrequency {
+  DAILY
+  SPECIFIC_DAYS
+  AS_NEEDED
+  WEEKLY
+}
+
+enum MedicationForm {
+  TABLET
+  CAPSULE
+  SYRUP
+  INJECTION
+  DROPS
+  INHALER
+  TOPICAL
+  OTHER
+}
+
+enum AppointmentStatus {
+  UPCOMING
+  COMPLETED
+  CANCELLED
+  RESCHEDULED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum NoteCategory {
+  GENERAL
+  OBSERVATION
+  MOOD
+  HEALTH_UPDATE
+  HANDOVER
+  INCIDENT
+}
+
+enum NotificationType {
+  MEDICATION_REMINDER
+  MISSED_DOSE_ALERT
+  ESCALATION_WARNING
+  APPOINTMENT_REMINDER
+  CARE_TASK_ASSIGNED
+  REFILL_ALERT
+  SYSTEM
+}
+
+model User {
+  id              String         @id @default(uuid())
+  email           String         @unique
+  name            String
+  passwordHash    String
+  role            UserRole       @default(FAMILY)
+  phoneNumber     String?
+  avatarUrl       String?
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  // Relationships
+  circleMemberships CareCircleMember[]
+  createdCircles    CareCircle[]       @relation("CreatedCircles")
+  sentInvitations   CareCircleInvitation[] @relation("SentInvitations")
+  elderlyProfilesCreated ElderlyProfile[] @relation("CreatedProfiles")
+  confirmedDoses    ScheduledDose[]    @relation("ConfirmedBy")
+  assignedTasks     CareTask[]         @relation("AssignedTo")
+  completedTasks    CareTask[]         @relation("CompletedBy")
+  authoredNotes     CareNote[]         @relation("AuthoredNotes")
+  handoverNotesReceived CareNote[]     @relation("HandoverTo")
+  createdAppointments Appointment[]    @relation("CreatedAppointments")
+  notifications     Notification[]
+  notificationPref  NotificationPreference?
+  auditLogs         AuditLog[]
+
+  @@index([email])
+}
+
+model ElderlyProfile {
+  id                    String         @id @default(uuid())
+  name                  String
+  preferredName         String?
+  dateOfBirth           DateTime
+  gender                String?
+  bloodGroup            String?
+  allergies             String[]       @default([])
+  medicalConditions     String[]       @default([])
+  emergencyContactName  String
+  emergencyContactPhone String
+  emergencyContactRelation String?
+  notes                 String?
+  avatarUrl             String?
+  isSeniorModeActive    Boolean        @default(false)
+  seniorPin             String?        // Hashed 4-digit PIN for rapid simplified senior check-in
+  createdById           String
+  createdBy             User           @relation("CreatedProfiles", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+
+  careCircles           CareCircle[]
+  medications           Medication[]
+  scheduledDoses        ScheduledDose[]
+  appointments          Appointment[]
+  careTasks             CareTask[]
+  careNotes             CareNote[]
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+
+  @@index([createdById])
+}
+
+model CareCircle {
+  id                String                 @id @default(uuid())
+  name              String
+  elderlyProfileId  String
+  elderlyProfile    ElderlyProfile         @relation(fields: [elderlyProfileId], references: [id], onDelete: Cascade)
+  createdById       String
+  createdBy         User                   @relation("CreatedCircles", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  members           CareCircleMember[]
+  invitations       CareCircleInvitation[]
+  auditLogs         AuditLog[]
+
+  @@index([elderlyProfileId])
+  @@index([createdById])
+}
+
+model CareCircleMember {
+  id            String       @id @default(uuid())
+  careCircleId  String
+  careCircle    CareCircle   @relation(fields: [careCircleId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role          CircleRole   @default(FAMILY_MEMBER)
+  permissions   String[]     @default(["CAN_VIEW_RECORDS", "CAN_CONFIRM_DOSE"])
+  isActive      Boolean      @default(true)
+  joinedAt      DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([careCircleId, userId])
+  @@index([careCircleId])
+  @@index([userId])
+}
+
+model CareCircleInvitation {
+  id            String           @id @default(uuid())
+  careCircleId  String
+  careCircle    CareCircle       @relation(fields: [careCircleId], references: [id], onDelete: Cascade)
+  email         String
+  role          CircleRole       @default(FAMILY_MEMBER)
+  token         String           @unique
+  status        InvitationStatus @default(PENDING)
+  invitedById   String
+  invitedBy     User             @relation("SentInvitations", fields: [invitedById], references: [id], onDelete: Cascade)
+  expiresAt     DateTime
+  acceptedAt    DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([token])
+  @@index([email])
+  @@index([careCircleId])
+}
+
+model Medication {
+  id                    String                @id @default(uuid())
+  elderlyProfileId      String
+  elderlyProfile        ElderlyProfile        @relation(fields: [elderlyProfileId], references: [id], onDelete: Cascade)
+  name                  String
+  brandName             String?
+  genericName           String?
+  form                  MedicationForm        @default(TABLET)
+  strength              String                // e.g. "500 mg", "10 ml"
+  dosageInstructions    String                // e.g. "Take 1 tablet after food with water"
+  prescribingDoctor     String?
+  prescribingClinic     String?
+  rxNumber              String?
+  purpose               String?               // e.g. "Hypertension", "Type 2 Diabetes"
+  isArchived            Boolean               @default(false)
+  discontinuedReason    String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  schedules             MedicationSchedule[]
+  scheduledDoses        ScheduledDose[]
+  stock                 MedicationStock?
+
+  @@index([elderlyProfileId])
+  @@index([isArchived])
+}
+
+model MedicationSchedule {
+  id                  String             @id @default(uuid())
+  medicationId        String
+  medication          Medication         @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  frequency           ScheduleFrequency  @default(DAILY)
+  timesOfDay          String[]           // e.g. ["08:00", "20:00"]
+  daysOfWeek          Int[]              @default([0, 1, 2, 3, 4, 5, 6]) // 0=Sunday
+  startDate           DateTime           @default(now())
+  endDate             DateTime?
+  dosageQuantity      Float              @default(1.0)
+  instructions        String?
+  isActive            Boolean            @default(true)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  scheduledDoses      ScheduledDose[]
+
+  @@index([medicationId])
+}
+
+model ScheduledDose {
+  id                    String             @id @default(uuid())
+  medicationId          String
+  medication            Medication         @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  scheduleId            String?
+  schedule              MedicationSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  elderlyProfileId      String
+  elderlyProfile        ElderlyProfile     @relation(fields: [elderlyProfileId], references: [id], onDelete: Cascade)
+  scheduledAt           DateTime
+  status                DoseStatus         @default(SCHEDULED)
+  confirmedAt           DateTime?
+  confirmedById         String?
+  confirmedBy           User?              @relation("ConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  confirmationNotes     String?
+  gracePeriodMinutes    Int                @default(45)
+  escalationLevel       Int                @default(0) // 0: None, 1: Caretaker notified, 2: Family escalation
+  escalatedAt           DateTime?
+  idempotencyKey        String?            @unique
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  @@index([elderlyProfileId, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([medicationId])
+}
+
+model MedicationStock {
+  id                  String       @id @default(uuid())
+  medicationId        String       @unique
+  medication          Medication   @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  currentStock        Float        @default(0)
+  unit                String       @default("tablets") // tablets, capsules, ml, sprays
+  refillThreshold     Float        @default(10)
+  packageSize         Float?
+  lastRefillDate      DateTime?
+  notes               String?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  @@index([medicationId])
+}
+
+model Appointment {
+  id                    String             @id @default(uuid())
+  elderlyProfileId      String
+  elderlyProfile        ElderlyProfile     @relation(fields: [elderlyProfileId], references: [id], onDelete: Cascade)
+  title                 String
+  doctorName            String
+  specialty             String?
+  clinicName            String
+  locationAddress       String?
+  appointmentDate       DateTime
+  status                AppointmentStatus  @default(UPCOMING)
+  reminderMinutesBefore Int                @default(1440) // 24 hours
+  reminderSent          Boolean            @default(false)
+  notes                 String?
+  outcomeSummary        String?
+  createdById           String
+  createdBy             User               @relation("CreatedAppointments", fields: [createdById], references: [id], onDelete: Cascade)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  @@index([elderlyProfileId, appointmentDate])
+  @@index([status])
+}
+
+model CareTask {
+  id                String         @id @default(uuid())
+  elderlyProfileId  String
+  elderlyProfile    ElderlyProfile @relation(fields: [elderlyProfileId], references: [id], onDelete: Cascade)
+  assignedToId      String?
+  assignedTo        User?          @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  title             String
+  description       String?
+  dueDate           DateTime
+  priority          TaskPriority   @default(MEDIUM)
+  status            TaskStatus     @default(PENDING)
+  completedAt       DateTime?
+  completedById     String?
+  completedBy       User?          @relation("CompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  notes             String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([elderlyProfileId, dueDate])
+  @@index([assignedToId, status])
+}
+
+model CareNote {
+  id                  String         @id @default(uuid())
+  elderlyProfileId    String
+  elderlyProfile      ElderlyProfile @relation(fields: [elderlyProfileId], references: [id], onDelete: Cascade)
+  authorId            String
+  author              User           @relation("AuthoredNotes", fields: [authorId], references: [id], onDelete: Cascade)
+  category            NoteCategory   @default(GENERAL)
+  title               String
+  content             String
+  vitalSigns          Json?          // { bp: "120/80", pulse: 72, sugar: 110, temp: 98.6 }
+  isPinned            Boolean        @default(false)
+  shiftHandoverToId   String?
+  shiftHandoverTo     User?          @relation("HandoverTo", fields: [shiftHandoverToId], references: [id], onDelete: SetNull)
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([elderlyProfileId, createdAt])
+  @@index([category])
+}
+
+model Notification {
+  id                String           @id @default(uuid())
+  userId            String
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  elderlyProfileId  String?
+  elderlyProfile    ElderlyProfile?  @relation(fields: [elderlyProfileId], references: [id], onDelete: SetNull)
+  type              NotificationType
+  title             String
+  message           String
+  data              Json?
+  isRead            Boolean          @default(false)
+  readAt            DateTime?
+  deliveryStatus    String           @default("SENT") // SENT, FAILED
+  emailSent         Boolean          @default(false)
+  createdAt         DateTime         @default(now())
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+model NotificationPreference {
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailReminders        Boolean  @default(true)
+  missedDoseAlerts      Boolean  @default(true)
+  escalationAlerts      Boolean  @default(true)
+  appointmentReminders  Boolean  @default(true)
+  dailySummaryEmail     Boolean  @default(false)
+  gracePeriodMinutes    Int      @default(45)
+  updatedAt             DateTime @updatedAt
+}
+
+model AuditLog {
+  id                String          @id @default(uuid())
+  elderlyProfileId  String?
+  elderlyProfile    ElderlyProfile? @relation(fields: [elderlyProfileId], references: [id], onDelete: SetNull)
+  careCircleId      String?
+  careCircle        CareCircle?     @relation(fields: [careCircleId], references: [id], onDelete: SetNull)
+  userId            String?
+  user              User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action            String          // e.g. DOSE_CONFIRMED, MEDICATION_CREATED, ACCESS_REVOKED
+  entityType        String          // Dose, Medication, CareCircle, Member
+  entityId          String?
+  details           Json?
+  ipAddress         String?
+  createdAt         DateTime        @default(now())
+
+  @@index([elderlyProfileId, createdAt])
+  @@index([action])
+}
