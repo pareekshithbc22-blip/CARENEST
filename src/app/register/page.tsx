@@ -50,7 +50,13 @@ export default function RegisterPage() {
       });
 
       if (!signInRes?.error) {
-        router.push("/dashboard/family");
+        if (role === "SENIOR") {
+          router.push("/dashboard/senior");
+        } else if (role === "CARETAKER") {
+          router.push("/dashboard/caretaker");
+        } else {
+          router.push("/dashboard/family");
+        }
         router.refresh();
       } else {
         router.push("/login");

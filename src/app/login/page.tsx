@@ -43,7 +43,23 @@ export default function LoginPage() {
       setError("Invalid email address or password.");
       setLoading(false);
     } else {
-      router.push(callbackUrl);
+      try {
+        const sessionRes = await fetch("/api/auth/session");
+        const sessionData = await sessionRes.json();
+        const role = sessionData?.user?.role;
+
+        if (callbackUrl && callbackUrl !== "/dashboard/family") {
+          router.push(callbackUrl);
+        } else if (role === "SENIOR") {
+          router.push("/dashboard/senior");
+        } else if (role === "CARETAKER") {
+          router.push("/dashboard/caretaker");
+        } else {
+          router.push("/dashboard/family");
+        }
+      } catch {
+        router.push(callbackUrl || "/dashboard/family");
+      }
       router.refresh();
     }
   };

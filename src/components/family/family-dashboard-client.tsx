@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import {
   Pill,
   Calendar,
@@ -20,6 +21,8 @@ import { AnalyticsCharts } from "./analytics-charts";
 import { AddMedicationModal } from "./add-medication-modal";
 import { AddAppointmentModal } from "./add-appointment-modal";
 import { InviteMemberModal } from "./invite-member-modal";
+import { AddElderlyProfileModal } from "./add-elderly-profile-modal";
+import { UserPlus } from "lucide-react";
 
 interface FamilyDashboardClientProps {
   profile: any;
@@ -32,18 +35,20 @@ interface FamilyDashboardClientProps {
 
 export function FamilyDashboardClient({
   profile,
-  availableProfiles: _availableProfiles,
+  availableProfiles,
   analytics,
   refillEstimates,
   timeline,
   currentUserId,
 }: FamilyDashboardClientProps) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = React.useState<"overview" | "medications" | "appointments" | "circle" | "timeline" | "analytics">("overview");
 
   // Modals state
   const [showAddMedModal, setShowAddMedModal] = React.useState(false);
   const [showAddApptModal, setShowAddApptModal] = React.useState(false);
   const [showInviteModal, setShowInviteModal] = React.useState(false);
+  const [showAddProfileModal, setShowAddProfileModal] = React.useState(false);
 
   // Background escalation trigger
   const [isEscalating, setIsEscalating] = React.useState(false);
@@ -217,6 +222,32 @@ export function FamilyDashboardClient({
 
             {/* Top Quick Actions */}
             <div className="flex flex-wrap items-center gap-2">
+              {availableProfiles && availableProfiles.length > 1 && (
+                <div className="flex items-center space-x-1.5 mr-1">
+                  <span className="text-xs font-semibold text-slate-500">Loved One:</span>
+                  <select
+                    value={profile.id}
+                    onChange={(e) => {
+                      router.push(`/dashboard/family?profileId=${e.target.value}`);
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-800 shadow-2xs focus:outline-teal-600"
+                  >
+                    {availableProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} {p.preferredName ? `("${p.preferredName}")` : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowAddProfileModal(true)}
+                className="text-xs border-teal-300 text-teal-800 hover:bg-teal-50"
+              >
+                <UserPlus className="h-3.5 w-3.5 mr-1" /> Add Profile
+              </Button>
               <Button
                 variant="outline"
                 size="sm"
@@ -879,6 +910,18 @@ export function FamilyDashboardClient({
         onOpenChange={setShowInviteModal}
         careCircleId={careCircle?.id || ""}
         onSuccess={() => {}}
+      />
+
+      <AddElderlyProfileModal
+        open={showAddProfileModal}
+        onOpenChange={setShowAddProfileModal}
+        onSuccess={(id) => {
+          if (id) {
+            router.push(`/dashboard/family?profileId=${id}`);
+          } else {
+            router.refresh();
+          }
+        }}
       />
     </div>
   );

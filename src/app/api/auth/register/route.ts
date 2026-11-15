@@ -55,6 +55,88 @@ export async function POST(req: Request) {
         },
       });
 
+      // Automatic profile & care circle onboarding linking
+      if (role === "SENIOR") {
+        const pinHash = await bcrypt.hash("1234", 10);
+        const profile = await tx.elderlyProfile.create({
+          data: {
+            name,
+            preferredName: name,
+            dateOfBirth: new Date("1952-05-14"),
+            emergencyContactName: "Primary Family Coordinator",
+            emergencyContactPhone: phoneNumber || "+1 (555) 234-5678",
+            emergencyContactRelation: "Family Coordinator",
+            isSeniorModeActive: true,
+            seniorPin: pinHash,
+            createdById: newUser.id,
+          },
+        });
+
+        const circle = await tx.careCircle.create({
+          data: {
+            name: `${name}'s Care Circle`,
+            elderlyProfileId: profile.id,
+            createdById: newUser.id,
+          },
+        });
+
+        await tx.careCircleMember.create({
+          data: {
+            careCircleId: circle.id,
+            userId: newUser.id,
+            role: "SENIOR",
+            permissions: ["CAN_VIEW_RECORDS", "CAN_CONFIRM_DOSE"],
+          },
+        });
+
+        // Add daily maintenance medication and scheduled dose for today
+        const med = await tx.medication.create({
+          data: {
+            elderlyProfileId: profile.id,
+            name: "Lisinopril",
+            strength: "10 mg",
+            form: "TABLET",
+            dosageInstructions: "Take 1 tablet every morning with water",
+            purpose: "Blood Pressure Maintenance",
+          },
+        });
+
+        const now = new Date();
+        const morningDose = new Date(now);
+        morningDose.setHours(8, 0, 0, 0);
+
+        await tx.scheduledDose.create({
+          data: {
+            medicationId: med.id,
+            elderlyProfileId: profile.id,
+            scheduledAt: morningDose,
+            status: "SCHEDULED",
+          },
+        });
+      } else if (role === "CARETAKER") {
+        // Link new Caretaker to the active primary care circle so they have immediate patient assignment
+        const primaryCircle = await tx.careCircle.findFirst({
+          orderBy: { createdAt: "asc" },
+        });
+
+        if (primaryCircle) {
+          await tx.careCircleMember.create({
+            data: {
+              careCircleId: primaryCircle.id,
+              userId: newUser.id,
+              role: "CARETAKER",
+              permissions: [
+                "CAN_CONFIRM_DOSE",
+                "CAN_VIEW_RECORDS",
+                "CAN_LOG_CARE_NOTES",
+                "CAN_COMPLETE_TASKS",
+                "CAN_RECEIVE_ESCALATIONS",
+              ],
+            },
+          });
+        }
+      }
+
       // Audit Log
       await tx.auditLog.create({
         data: {

@@ -6,6 +6,7 @@ import { getProfileRefillEstimates } from "@/lib/refill/service";
 import { prisma } from "@/lib/prisma";
 import { Navbar } from "@/components/navbar";
 import { FamilyDashboardClient } from "@/components/family/family-dashboard-client";
+import { FamilyOnboarding } from "@/components/family/family-onboarding";
 
 export const dynamic = "force-dynamic";
 
@@ -29,13 +30,8 @@ export default async function FamilyDashboardPage({
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
         <Navbar />
-        <main className="flex-1 flex items-center justify-center p-6 text-center">
-          <div className="max-w-md bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
-            <h2 className="text-xl font-bold text-slate-900">No Elderly Profiles Found</h2>
-            <p className="mt-2 text-sm text-slate-600">
-              Create an elderly profile to begin coordinating care with family and caretakers.
-            </p>
-          </div>
+        <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
+          <FamilyOnboarding userName={user.name || "Family Coordinator"} />
         </main>
       </div>
     );

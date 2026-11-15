@@ -21,7 +21,19 @@ export default async function CaretakerDashboardPage() {
   // Accessible profiles
   const profiles = await getAuthorizedProfiles(user.id);
   if (profiles.length === 0) {
-    redirect("/dashboard/family");
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col">
+        <Navbar />
+        <main className="flex-1 flex items-center justify-center p-6 text-center">
+          <div className="max-w-lg bg-white p-8 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+            <h2 className="text-xl font-bold text-slate-900">Awaiting Patient Care Assignment</h2>
+            <p className="text-sm text-slate-600">
+              Welcome, {user.name}. You are registered as a Licensed Caretaker / Nurse. You will see assigned patient schedules, clinical tasks, vital sign logs, and handover notes here once a family coordinator assigns you to their Care Circle.
+            </p>
+          </div>
+        </main>
+      </div>
+    );
   }
 
   // Assigned tasks

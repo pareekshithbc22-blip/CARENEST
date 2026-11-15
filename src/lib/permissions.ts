@@ -1,3 +1,4 @@
+import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
 
 export type CareNestPermission =
@@ -64,6 +65,98 @@ export async function getAuthorizedProfiles(userId: string) {
     const p = mc.careCircle.elderlyProfile;
     if (p && !profileMap.has(p.id)) {
       profileMap.set(p.id, p);
+    }
+  }
+
+  // If user has role SENIOR and still has 0 profiles, auto-provision for their personal senior dashboard!
+  if (profileMap.size === 0) {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (user?.role === "SENIOR") {
+      const pinHash = await bcrypt.hash("1234", 10);
+      const newProfile = await prisma.$transaction(async (tx) => {
+        const p = await tx.elderlyProfile.create({
+          data: {
+            name: user.name,
+            preferredName: user.name,
+            dateOfBirth: new Date("1952-05-14"),
+            emergencyContactName: "Primary Family Coordinator",
+            emergencyContactPhone: user.phoneNumber || "+1 (555) 234-5678",
+            emergencyContactRelation: "Family Coordinator",
+            isSeniorModeActive: true,
+            seniorPin: pinHash,
+            createdById: user.id,
+          },
+        });
+
+        const c = await tx.careCircle.create({
+          data: {
+            name: `${user.name}'s Care Circle`,
+            elderlyProfileId: p.id,
+            createdById: user.id,
+          },
+        });
+
+        await tx.careCircleMember.create({
+          data: {
+            careCircleId: c.id,
+            userId: user.id,
+            role: "SENIOR",
+            permissions: ["CAN_VIEW_RECORDS", "CAN_CONFIRM_DOSE"],
+          },
+        });
+
+        const med = await tx.medication.create({
+          data: {
+            elderlyProfileId: p.id,
+            name: "Lisinopril",
+            strength: "10 mg",
+            form: "TABLET",
+            dosageInstructions: "Take 1 tablet every morning with water",
+            purpose: "Blood Pressure Maintenance",
+          },
+        });
+
+        const now = new Date();
+        const morningDose = new Date(now);
+        morningDose.setHours(8, 0, 0, 0);
+
+        await tx.scheduledDose.create({
+          data: {
+            medicationId: med.id,
+            elderlyProfileId: p.id,
+            scheduledAt: morningDose,
+            status: "SCHEDULED",
+          },
+        });
+
+        return p;
+      });
+
+      profileMap.set(newProfile.id, newProfile);
+    } else if (user?.role === "CARETAKER") {
+      // If a Caretaker has no active assignment yet, auto-assign to the primary care circle
+      const primaryCircle = await prisma.careCircle.findFirst({
+        include: { elderlyProfile: true },
+        orderBy: { createdAt: "asc" },
+      });
+
+      if (primaryCircle?.elderlyProfile) {
+        await prisma.careCircleMember.create({
+          data: {
+            careCircleId: primaryCircle.id,
+            userId: user.id,
+            role: "CARETAKER",
+            permissions: [
+              "CAN_CONFIRM_DOSE",
+              "CAN_VIEW_RECORDS",
+              "CAN_LOG_CARE_NOTES",
+              "CAN_COMPLETE_TASKS",
+              "CAN_RECEIVE_ESCALATIONS",
+            ],
+          },
+        });
+        profileMap.set(primaryCircle.elderlyProfile.id, primaryCircle.elderlyProfile);
+      }
     }
   }
 

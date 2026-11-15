@@ -26,7 +26,7 @@ export default function HomePage() {
 
       <main className="flex-1">
         {/* Hero Section */}
-        <section className="relative overflow-hidden bg-gradient-to-b from-teal-50/70 via-white to-slate-50 pt-16 pb-20 sm:pt-24 sm:pb-28 border-b border-slate-200">
+        <section id="about" className="relative overflow-hidden bg-gradient-to-b from-teal-50/70 via-white to-slate-50 pt-16 pb-20 sm:pt-24 sm:pb-28 border-b border-slate-200">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <div className="text-center max-w-3xl mx-auto space-y-6">
               <div className="inline-flex items-center space-x-2 rounded-full bg-teal-100/80 px-4 py-1.5 text-xs font-bold text-teal-800 border border-teal-200">
@@ -121,7 +121,7 @@ export default function HomePage() {
         </section>
 
         {/* How It Works: The Three Circles of Care */}
-        <section className="py-20 bg-white border-b border-slate-200">
+        <section id="features" className="py-20 bg-white border-b border-slate-200">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <div className="text-center max-w-2xl mx-auto space-y-2 mb-16">
               <span className="text-xs font-bold uppercase tracking-wider text-teal-700">
@@ -203,7 +203,7 @@ export default function HomePage() {
         </section>
 
         {/* Intelligent Missed-Dose Escalation Engine Section */}
-        <section className="py-20 bg-slate-50 border-b border-slate-200">
+        <section id="help" className="py-20 bg-slate-50 border-b border-slate-200">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <div className="grid gap-12 lg:grid-cols-2 items-center">
               <div className="space-y-6">
@@ -320,7 +320,7 @@ export default function HomePage() {
       </main>
 
       {/* Footer */}
-      <footer className="bg-white border-t border-slate-200 py-10 text-xs text-slate-500">
+      <footer id="contact" className="bg-white border-t border-slate-200 py-10 text-xs text-slate-500">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center space-x-2">
             <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-teal-700 text-white">
