@@ -50,7 +50,49 @@ CareNest is built not as a generic CRUD reminder app, but as a clinical-grade co
 
 ---
 
-## 4. Role-Based Architecture & Accounts
+## 4. Judge Demo Access
+
+For hackathon judges and evaluators, CareNest includes a pre-seeded, interconnected clinical healthcare ecosystem featuring realistic medical conditions, multi-profile family administration, multi-patient caretaker telemetry, and accessible senior PIN authentication.
+
+### Demo User Accounts & Credentials
+
+| Role | Name | Email / Login Identifier | Password / PIN | Linked Patients / Assignments | Dedicated Dashboard |
+|---|---|---|---|---|---|
+| **Family Administrator** | **Amit Kumar** | `amit.kumar@carenest.org` | `CareNest2026!` | Ramesh Kumar (Father), Suresh Kumar (Uncle) | [`/dashboard/family`](http://localhost:3000/dashboard/family) |
+| **Family Administrator** | **Priya Sharma** | `priya.sharma@carenest.org` | `CareNest2026!` | Lakshmi Sharma (Mother), Meera Sharma (Grandmother) | [`/dashboard/family`](http://localhost:3000/dashboard/family) |
+| **Family Administrator** | **Sarah Vance** | `sarah.vance@carenest.org` | `CareNest2026!` | Eleanor Vance (Mother), Arthur Vance (Father) | [`/dashboard/family`](http://localhost:3000/dashboard/family) |
+| **Licensed Caretaker** | **Rahul Verma, RN** | `rahul.verma@carenest.org` | `CareNest2026!` | Ramesh Kumar & Suresh Kumar *(Multi-Patient Monitoring)* | [`/dashboard/caretaker`](http://localhost:3000/dashboard/caretaker) |
+| **Licensed Caretaker** | **Anjali Rao, RN** | `anjali.rao@carenest.org` | `CareNest2026!` | Lakshmi Sharma & Meera Sharma *(Multi-Patient Monitoring)* | [`/dashboard/caretaker`](http://localhost:3000/dashboard/caretaker) |
+| **Licensed Caretaker** | **Marcus Reed, RN** | `marcus.reed@carenest.org` | `CareNest2026!` | Eleanor Vance & Arthur Vance *(Multi-Patient Monitoring)* | [`/dashboard/caretaker`](http://localhost:3000/dashboard/caretaker) |
+| **Senior Patient** | **Ramesh Kumar** | Identifier: `Ramesh` or `ramesh.kumar@carenest.org` | PIN: **`1234`** *(or `CareNest2026!`)* | Hypertension & Type 2 Diabetes | [`/dashboard/senior`](http://localhost:3000/dashboard/senior) |
+| **Senior Patient** | **Suresh Kumar** | Identifier: `Suresh` or `suresh.kumar@carenest.org` | PIN: **`1234`** *(or `CareNest2026!`)* | Osteoarthritis & Stage 1 Hypertension | [`/dashboard/senior`](http://localhost:3000/dashboard/senior) |
+| **Senior Patient** | **Lakshmi Sharma** | Identifier: `Lakshmi` or `lakshmi.sharma@carenest.org` | PIN: **`1234`** *(or `CareNest2026!`)* | Hypothyroidism & Osteoporosis | [`/dashboard/senior`](http://localhost:3000/dashboard/senior) |
+| **Senior Patient** | **Meera Sharma** | Identifier: `Meera` or `meera.sharma@carenest.org` | PIN: **`1234`** *(or `CareNest2026!`)* | Memory Care & Mild Cognitive Impairment | [`/dashboard/senior`](http://localhost:3000/dashboard/senior) |
+| **Senior Patient** | **Eleanor Vance** | Identifier: `Eleanor` or `eleanor.vance@carenest.org` | PIN: **`1234`** *(or `CareNest2026!`)* | Hypertension & Type 2 Diabetes | [`/dashboard/senior`](http://localhost:3000/dashboard/senior) |
+
+*All accounts are created with bcrypt-hashed credentials and can be safely re-seeded using `node prisma/seed.mjs`.*
+
+### Demonstration Walkthrough Scenarios
+
+1. **Family Administrator Portal (Amit Kumar)**:
+   - Log in as `amit.kumar@carenest.org`.
+   - See Amit's profile header identifying him as **Family Administrator**.
+   - See selectable senior cards for **Ramesh Kumar (Father)** and **Suresh Kumar (Uncle)**.
+   - Click between Ramesh and Suresh: all information (vitals, prescribed medicines, appointments, adherence history, assigned caretaker phone) updates instantly in strict data isolation.
+   - Note that medication management is strictly read-only for Family Administrators.
+   - Click **"+ Add Senior Patient"** to demonstrate automatic assignment of the least-loaded registered caretaker!
+2. **Multi-Patient Caretaker Monitoring (Rahul Verma, RN)**:
+   - Log in as `rahul.verma@carenest.org`.
+   - The caretaker workspace displays all assigned patients (**Ramesh Kumar** & **Suresh Kumar**).
+   - Live telemetry (3.5s interval) and Recharts vitals charts dynamically isolate to the selected senior.
+   - Caretaker can review today's scheduled medication doses and click **"Confirm Dose"** or log clinical shift handovers.
+3. **Senior Patient Autonomous Portal (Ramesh Kumar)**:
+   - Log in with PIN **`1234`** and identifier `Ramesh` on the Senior Login screen.
+   - Large, accessible buttons (60px+), high-contrast text, synthesized Web Audio chime, and 1-tap dose confirmation.
+
+---
+
+## 5. Role-Based Architecture & Accounts
 
 CareNest strictly preserves three specialized roles with distinct permissions:
 
@@ -62,7 +104,7 @@ CareNest strictly preserves three specialized roles with distinct permissions:
 
 ---
 
-## 5. Core Platform Modules
+## 6. Core Platform Modules
 
 ### A. Senior Dashboard (5 Accessible Tabs)
 1. **Overview & Today's Schedule**: High-contrast dose cards, due times, prominent "I Took This Dose" button, and Web Audio synthesized reminder banner.
@@ -99,7 +141,7 @@ CareNest strictly preserves three specialized roles with distinct permissions:
 
 ---
 
-## 6. Official Project Contacts
+## 7. Official Project Contacts
 
 For hackathon evaluation and coordination:
 - **Ravi P Nawale** — `6361963006` • [ravi.p.nawale.carenest@gmail.com](mailto:ravi.p.nawale.carenest@gmail.com)
@@ -107,7 +149,7 @@ For hackathon evaluation and coordination:
 
 ---
 
-## 7. Quick Start & Local Setup
+## 8. Quick Start & Local Setup
 
 ### 1. Prerequisites
 - Node.js v20+ or v22+
@@ -154,7 +196,7 @@ Open [http://localhost:3000](http://localhost:3000) to view CareNest.
 
 ---
 
-## 8. Quality Assurance & Verification Commands
+## 9. Quality Assurance & Verification Commands
 
 All test suites and compilers execute cleanly:
 
@@ -177,7 +219,7 @@ npm run build
 
 ---
 
-## 9. Deployment to Google Cloud Run
+## 10. Deployment to Google Cloud Run
 
 CareNest is fully prepared for containerized deployment on Google Cloud Run with Next.js `output: "standalone"`:
 
@@ -198,7 +240,7 @@ Refer to [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for complete instructions, C
 
 ---
 
-## 10. Repository Health & Competition Compliance
+## 11. Repository Health & Competition Compliance
 
 - **Git Branch**: Exactly one branch: `main`.
 - **Repository Size**: **< 2 MB** (strictly below 10 MB limit).

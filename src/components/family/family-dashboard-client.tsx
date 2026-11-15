@@ -120,9 +120,15 @@ export function FamilyDashboardClient({
   const memberListRef = React.useRef<HTMLDivElement>(null);
 
   // Fetch today's doses for the currently active senior
+  const activeProfileId = profile?.id;
   const loadDoses = React.useCallback(async () => {
+    if (!activeProfileId) {
+      setDoses([]);
+      setLoadingDoses(false);
+      return;
+    }
     try {
-      const res = await fetch(`/api/doses?profileId=${profile.id}&filter=today`);
+      const res = await fetch(`/api/doses?profileId=${activeProfileId}&filter=today`);
       if (res.ok) {
         const data = await res.json();
         setDoses(data.doses || []);
@@ -132,7 +138,7 @@ export function FamilyDashboardClient({
     } finally {
       setLoadingDoses(false);
     }
-  }, [profile.id]);
+  }, [activeProfileId]);
 
   React.useEffect(() => {
     loadDoses();
@@ -210,14 +216,14 @@ export function FamilyDashboardClient({
     }
   };
 
-  const careCircle = profile.careCircles[0];
+  const careCircle = profile?.careCircles?.[0];
   const members = careCircle?.members || [];
-  const medications = profile.medications || [];
-  const appointments = profile.appointments || [];
+  const medications = profile?.medications || [];
+  const appointments = profile?.appointments || [];
 
   const attentionDoses = doses.filter((d) => d.status === "MISSED" || d.status === "UNCONFIRMED");
   const takenDosesCount = doses.filter((d) => d.status === "TAKEN").length;
-  const lowStockMeds = refillEstimates.filter((r) => r.isLowStock);
+  const lowStockMeds = (refillEstimates || []).filter((r) => r.isLowStock);
 
   // Latest vital measurement from history
   const latestVital = vitalsHistory.length > 0 ? vitalsHistory[0] : null;
@@ -244,7 +250,7 @@ export function FamilyDashboardClient({
                 Family Administrator: {adminUser.name}
               </h1>
               <p className="text-xs font-medium text-slate-600 mt-1">
-                Overseeing senior health records, coordinating appointments, and reviewing medication adherence.
+                {adminUser.email} • Overseeing senior health records, coordinating appointments, and reviewing medication adherence.
               </p>
             </div>
 
@@ -253,7 +259,7 @@ export function FamilyDashboardClient({
                 onClick={() => setShowAddProfileModal(true)}
                 className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs shadow-md"
               >
-                <UserPlus className="h-4 w-4 mr-1.5" /> Register Senior Family Member
+                <UserPlus className="h-4 w-4 mr-1.5" /> Add Senior Patient
               </Button>
               <Button
                 variant="outline"
@@ -301,122 +307,164 @@ export function FamilyDashboardClient({
               </span>
             </div>
 
-            {/* Selectable Senior Cards Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {managedSeniors.map((senior) => {
-                const isSelected = senior.id === profile.id;
-                const relationDisplay = senior.emergencyContactRelation
-                  ? `(${senior.emergencyContactRelation})`
-                  : "";
-
-                return (
-                  <div
-                    key={senior.id}
-                    role="button"
-                    tabIndex={0}
-                    data-testid={`senior-card-${senior.id}`}
-                    onClick={() => handleSelectSenior(senior.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        handleSelectSenior(senior.id);
-                      }
-                    }}
-                    className={`cursor-pointer rounded-2xl border-2 p-5 transition-all text-left flex flex-col justify-between ${
-                      isSelected
-                        ? "border-teal-600 bg-teal-50/70 shadow-md ring-3 ring-teal-500/20"
-                        : "border-slate-200 bg-white hover:border-teal-300 hover:shadow-xs"
-                    }`}
+            {/* Selectable Senior Cards Grid or Empty State */}
+            {managedSeniors.length === 0 ? (
+              <div className="rounded-3xl border-2 border-dashed border-teal-200 bg-white p-10 text-center space-y-5 shadow-xs">
+                <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 ring-8 ring-teal-50/50">
+                  <Heart className="h-8 w-8 text-teal-600" />
+                </div>
+                <div className="max-w-md mx-auto space-y-2">
+                  <h3 className="text-xl font-black text-slate-900">
+                    No Senior Patients Registered Yet
+                  </h3>
+                  <p className="text-xs font-medium text-slate-600 leading-relaxed">
+                    Add your first senior patient to begin coordinating care with family and caretakers. Once registered, licensed caretakers will be automatically assigned to coordinate prescriptions and vitals monitoring.
+                  </p>
+                </div>
+                <div className="pt-2">
+                  <Button
+                    onClick={() => setShowAddProfileModal(true)}
+                    className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm shadow-md px-6 py-2.5"
                   >
-                    <div>
-                      {/* Senior Name & Selection Status */}
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center space-x-3">
-                          <div
-                            className={`flex h-12 w-12 items-center justify-center rounded-xl font-black text-base shadow-xs ${
-                              isSelected
-                                ? "bg-teal-700 text-white"
-                                : "bg-teal-100 text-teal-800"
-                            }`}
-                          >
-                            {senior.name[0]}
-                          </div>
-                          <div>
-                            <h3 className="text-base font-black text-slate-900 leading-snug">
-                              {senior.name} {relationDisplay}
-                            </h3>
-                            {senior.preferredName && senior.preferredName !== senior.name && (
-                              <p className="text-xs font-semibold text-slate-500">
-                                &quot;{senior.preferredName}&quot;
-                              </p>
-                            )}
-                          </div>
-                        </div>
+                    <UserPlus className="h-4 w-4 mr-2" /> Add Senior Patient
+                  </Button>
+                </div>
 
-                        {isSelected ? (
-                          <Badge className="bg-teal-700 text-white text-[10px] font-bold">
-                            ✓ Selected
-                          </Badge>
-                        ) : (
-                          <span className="text-xs font-bold text-teal-700 hover:underline">
-                            View Details →
-                          </span>
-                        )}
-                      </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-6 max-w-4xl mx-auto text-left">
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 text-teal-800 font-black text-xs mb-2">1</span>
+                    <h4 className="font-bold text-slate-900 text-xs">Add Senior Profile</h4>
+                    <p className="text-[11px] text-slate-500 mt-1">Register your loved one with their medical conditions and emergency contact info.</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 text-teal-800 font-black text-xs mb-2">2</span>
+                    <h4 className="font-bold text-slate-900 text-xs">Auto Caretaker Assignment</h4>
+                    <p className="text-[11px] text-slate-500 mt-1">CareNest automatically pairs an available licensed nurse to oversee medications.</p>
+                  </div>
+                  <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                    <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 text-teal-800 font-black text-xs mb-2">3</span>
+                    <h4 className="font-bold text-slate-900 text-xs">Unified Care Circle</h4>
+                    <p className="text-[11px] text-slate-500 mt-1">Track live dose adherence, vitals telemetry, appointments, and care logs in real time.</p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {managedSeniors.map((senior) => {
+                  const isSelected = profile ? senior.id === profile.id : false;
+                  const relationDisplay = senior.emergencyContactRelation
+                    ? `(${senior.emergencyContactRelation})`
+                    : "";
 
-                      {/* Caretaker Assignment Status */}
-                      <div className="mt-4 pt-3 border-t border-slate-100 space-y-1.5 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500 font-medium">Assigned Caretaker:</span>
-                          {senior.caretaker ? (
-                            <span className="font-bold text-slate-900">
-                              {senior.caretaker.name}
-                            </span>
-                          ) : (
-                            <Badge variant="warning" className="text-[10px] font-bold">
-                              Caretaker Pending Assignment
+                  return (
+                    <div
+                      key={senior.id}
+                      role="button"
+                      tabIndex={0}
+                      data-testid={`senior-card-${senior.id}`}
+                      onClick={() => handleSelectSenior(senior.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleSelectSenior(senior.id);
+                        }
+                      }}
+                      className={`cursor-pointer rounded-2xl border-2 p-5 transition-all text-left flex flex-col justify-between ${
+                        isSelected
+                          ? "border-teal-600 bg-teal-50/70 shadow-md ring-3 ring-teal-500/20"
+                          : "border-slate-200 bg-white hover:border-teal-300 hover:shadow-xs"
+                      }`}
+                    >
+                      <div>
+                        {/* Senior Name & Selection Status */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center space-x-3">
+                            <div
+                              className={`flex h-12 w-12 items-center justify-center rounded-xl font-black text-base shadow-xs ${
+                                isSelected
+                                  ? "bg-teal-700 text-white"
+                                  : "bg-teal-100 text-teal-800"
+                              }`}
+                            >
+                              {senior.name[0]}
+                            </div>
+                            <div>
+                              <h3 className="text-base font-black text-slate-900 leading-snug">
+                                {senior.name} {relationDisplay}
+                              </h3>
+                              {senior.preferredName && senior.preferredName !== senior.name && (
+                                <p className="text-xs font-semibold text-slate-500">
+                                  &quot;{senior.preferredName}&quot;
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {isSelected ? (
+                            <Badge className="bg-teal-700 text-white text-[10px] font-bold">
+                              ✓ Selected
                             </Badge>
+                          ) : (
+                            <span className="text-xs font-bold text-teal-700 hover:underline">
+                              View Details →
+                            </span>
                           )}
                         </div>
 
-                        {senior.caretaker && (
-                          <div className="flex items-center justify-between text-[11px]">
-                            <span className="text-slate-400">Registered Phone:</span>
-                            <span className="font-semibold text-teal-800 font-mono">
-                              {senior.caretaker.phoneNumber || "No phone listed"}
-                            </span>
+                        {/* Caretaker Assignment Status */}
+                        <div className="mt-4 pt-3 border-t border-slate-100 space-y-1.5 text-xs">
+                          <div className="flex items-center justify-between">
+                            <span className="text-slate-500 font-medium">Assigned Caretaker:</span>
+                            {senior.caretaker ? (
+                              <span className="font-bold text-slate-900">
+                                {senior.caretaker.name}
+                              </span>
+                            ) : (
+                              <Badge variant="warning" className="text-[10px] font-bold">
+                                Caretaker Pending Assignment
+                              </Badge>
+                            )}
                           </div>
-                        )}
-                      </div>
 
-                      {/* Badges */}
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {senior.bloodGroup && (
+                          {senior.caretaker && (
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-slate-400">Registered Phone:</span>
+                              <span className="font-semibold text-teal-800 font-mono">
+                                {senior.caretaker.phoneNumber || "No phone listed"}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Badges */}
+                        <div className="mt-3 flex flex-wrap gap-1.5">
+                          {senior.bloodGroup && (
+                            <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700">
+                              Blood: {senior.bloodGroup}
+                            </span>
+                          )}
                           <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700">
-                            Blood: {senior.bloodGroup}
+                            {senior.medicationsCount} Active Meds
                           </span>
-                        )}
-                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700">
-                          {senior.medicationsCount} Active Meds
+                          <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700">
+                            {senior.upcomingAppointmentsCount} Visits
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500 font-medium truncate max-w-[180px]">
+                          {senior.medicalConditions.slice(0, 2).join(", ") || "General Care"}
                         </span>
-                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-700">
-                          {senior.upcomingAppointmentsCount} Visits
+                        <span className={`font-black ${isSelected ? "text-teal-800" : "text-slate-400"}`}>
+                          {isSelected ? "Active Patient" : "Click to Select"}
                         </span>
                       </div>
                     </div>
-
-                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px]">
-                      <span className="text-slate-500 font-medium truncate max-w-[180px]">
-                        {senior.medicalConditions.slice(0, 2).join(", ") || "General Care"}
-                      </span>
-                      <span className={`font-black ${isSelected ? "text-teal-800" : "text-slate-400"}`}>
-                        {isSelected ? "Active Patient" : "Click to Select"}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       </section>
@@ -424,7 +472,8 @@ export function FamilyDashboardClient({
       {/* ======================================================== */}
       {/* 2. INDIVIDUAL SENIOR PROFILE DETAILS (SELECTED PATIENT) */}
       {/* ======================================================== */}
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6">
+      {profile && (
+        <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6">
         {/* Navigation Breadcrumb & Back to List Button */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
           <div className="flex items-center space-x-3">
@@ -1371,21 +1420,26 @@ export function FamilyDashboardClient({
           </div>
         )}
       </main>
+      )}
 
       {/* Modals */}
-      <AddAppointmentModal
-        open={showAddApptModal}
-        onOpenChange={setShowAddApptModal}
-        elderlyProfileId={profile.id}
-        onSuccess={() => window.location.reload()}
-      />
+      {profile && (
+        <>
+          <AddAppointmentModal
+            open={showAddApptModal}
+            onOpenChange={setShowAddApptModal}
+            elderlyProfileId={profile.id}
+            onSuccess={() => window.location.reload()}
+          />
 
-      <InviteMemberModal
-        open={showInviteModal}
-        onOpenChange={setShowInviteModal}
-        careCircleId={profile.careCircles[0]?.id}
-        onSuccess={() => window.location.reload()}
-      />
+          <InviteMemberModal
+            open={showInviteModal}
+            onOpenChange={setShowInviteModal}
+            careCircleId={profile.careCircles?.[0]?.id}
+            onSuccess={() => window.location.reload()}
+          />
+        </>
+      )}
 
       <AddElderlyProfileModal
         open={showAddProfileModal}

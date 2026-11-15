@@ -12,7 +12,11 @@ export const metadata = {
   description: "Assigned responsibilities, daily care tasks, clinical vitals logging, and shift handovers.",
 };
 
-export default async function CaretakerDashboardPage() {
+export default async function CaretakerDashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ patientId?: string; profileId?: string }>;
+}) {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login?callbackUrl=/dashboard/caretaker");
@@ -35,6 +39,12 @@ export default async function CaretakerDashboardPage() {
       </div>
     );
   }
+
+  const { patientId, profileId } = await searchParams;
+  const initialPatientId =
+    (patientId && profiles.some((p) => p.id === patientId) ? patientId : null) ||
+    (profileId && profiles.some((p) => p.id === profileId) ? profileId : null) ||
+    profiles[0]?.id;
 
   // Assigned tasks
   const tasks = await prisma.careTask.findMany({
@@ -61,7 +71,7 @@ export default async function CaretakerDashboardPage() {
       shiftHandoverTo: { select: { id: true, name: true } },
     },
     orderBy: [{ isPinned: "desc" }, { createdAt: "desc" }],
-    take: 10,
+    take: 15,
   });
 
   return (
@@ -76,6 +86,7 @@ export default async function CaretakerDashboardPage() {
       <main className="flex-1">
         <CaretakerDashboardClient
           caretakerName={user.name || "Care Staff"}
+          initialSelectedPatientId={initialPatientId}
           initialTasks={tasks}
           initialNotes={notes}
           profiles={profiles.map((p) => ({

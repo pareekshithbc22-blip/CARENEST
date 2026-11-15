@@ -103,10 +103,10 @@ export function AddElderlyProfileModal({
         <DialogHeader>
           <div className="flex items-center space-x-2 text-teal-700">
             <Heart className="h-5 w-5 fill-teal-100" />
-            <DialogTitle>Add Loved One (Elderly Profile)</DialogTitle>
+            <DialogTitle>Add Senior Patient Profile</DialogTitle>
           </div>
           <DialogDescription>
-            Create a healthcare profile to establish a Care Circle, organize medications, and coordinate family & caretakers.
+            Register a senior patient to establish a Care Circle, assign licensed caretakers, and coordinate family care.
           </DialogDescription>
         </DialogHeader>
 
@@ -322,7 +322,7 @@ export function AddElderlyProfileModal({
               className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
             >
               <UserPlus className="h-4 w-4 mr-2" />
-              {loading ? "Creating Profile..." : "Create Elderly Profile"}
+              {loading ? "Adding Patient..." : "Add Senior Patient"}
             </Button>
           </DialogFooter>
         </form>

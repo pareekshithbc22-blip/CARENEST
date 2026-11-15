@@ -6,7 +6,6 @@ import { getProfileRefillEstimates } from "@/lib/refill/service";
 import { prisma } from "@/lib/prisma";
 import { Navbar } from "@/components/navbar";
 import { FamilyDashboardClient } from "@/components/family/family-dashboard-client";
-import { FamilyOnboarding } from "@/components/family/family-onboarding";
 
 export const dynamic = "force-dynamic";
 
@@ -26,12 +25,32 @@ export default async function FamilyDashboardPage({
   }
 
   const profiles = await getAuthorizedProfiles(user.id);
+
+  // If the Family Administrator has no senior profiles registered yet, render dashboard with empty state
   if (profiles.length === 0) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col">
-        <Navbar />
-        <main className="flex-1 flex items-center justify-center p-4 sm:p-6">
-          <FamilyOnboarding userName={user.name || "Family Coordinator"} />
+        <Navbar
+          availableProfiles={[]}
+        />
+        <main className="flex-1">
+          <FamilyDashboardClient
+            adminUser={{
+              id: user.id,
+              name: user.name || "Family Administrator",
+              email: user.email || "",
+            }}
+            managedSeniors={[]}
+            profile={null}
+            activeAge={null}
+            activeCaretaker={null}
+            vitalsHistory={[]}
+            availableProfiles={[]}
+            analytics={null}
+            refillEstimates={[]}
+            timeline={[]}
+            currentUserId={user.id}
+          />
         </main>
       </div>
     );
@@ -40,7 +59,6 @@ export default async function FamilyDashboardPage({
   const { profileId } = await searchParams;
   const activeProfile =
     (profileId && profiles.find((p) => p.id === profileId)) ||
-    profiles.find((p) => p.name.includes("Eleanor")) ||
     profiles[0];
 
   // Fetch full details of the active selected profile
@@ -169,16 +187,18 @@ export default async function FamilyDashboardPage({
     });
 
   // Active profile's assigned caretaker (or null if pending)
-  const activeCaretakerMember = fullProfile.careCircles[0]?.members?.find(
-    (m) => m.role === "CARETAKER" && m.isActive
-  );
-  const activeCaretaker = activeCaretakerMember?.user
-    ? {
-        name: activeCaretakerMember.user.name,
-        phoneNumber: activeCaretakerMember.user.phoneNumber,
-        email: activeCaretakerMember.user.email,
-      }
-    : null;
+  let activeCaretaker: { name: string; phoneNumber: string | null; email: string } | null = null;
+  for (const c of fullProfile.careCircles) {
+    const cm = c.members?.find((m) => m.role === "CARETAKER" && m.isActive);
+    if (cm?.user) {
+      activeCaretaker = {
+        name: cm.user.name,
+        phoneNumber: cm.user.phoneNumber,
+        email: cm.user.email,
+      };
+      break;
+    }
+  }
 
   // Analytics, Refill Projections, and Timeline
   const [analytics, refillEstimates, timeline] = await Promise.all([
