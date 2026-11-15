@@ -50,6 +50,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Family Administrators and Seniors have read-only access to medication schedules
+  if (user.role === "FAMILY" || user.role === "SENIOR") {
+    return NextResponse.json(
+      { error: "Medication management is restricted to authorized licensed Caretakers. Family Administrators have read-only access." },
+      { status: 403 }
+    );
+  }
+
   try {
     const body = await req.json();
     const validated = MedicationCreateSchema.safeParse(body);

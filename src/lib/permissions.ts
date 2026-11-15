@@ -189,8 +189,35 @@ export async function verifyProfileAccess(
     return { authorized: false, reason: "PROFILE_NOT_FOUND", profile: null, memberRecord: null };
   }
 
-  // Profile creator always has full access
+  // Fetch user role to enforce server-side role boundaries
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, role: true },
+  });
+
+  // Strict restriction: Medication management (adding, editing, deleting) is exclusively reserved for Caretakers.
+  // Family Administrators and Seniors have read-only access to medications, schedules, and adherence.
+  if (requiredPermission === "CAN_MANAGE_MEDS") {
+    if (user?.role === "FAMILY" || user?.role === "SENIOR") {
+      return {
+        authorized: false,
+        reason: "MEDICATIONS_RESTRICTED_TO_CARETAKERS",
+        profile,
+        memberRecord: null,
+      };
+    }
+  }
+
+  // Profile creator has full access to administrative tasks (excluding medication management)
   if (profile.createdById === userId) {
+    if (requiredPermission === "CAN_MANAGE_MEDS") {
+      return {
+        authorized: false,
+        reason: "MEDICATIONS_RESTRICTED_TO_CARETAKERS",
+        profile,
+        memberRecord: null,
+      };
+    }
     return { authorized: true, profile, memberRecord: null };
   }
 
@@ -200,6 +227,14 @@ export async function verifyProfileAccess(
     if (member) {
       if (!requiredPermission) {
         return { authorized: true, profile, memberRecord: member };
+      }
+
+      // If requiredPermission is CAN_MANAGE_MEDS, member must have CAN_MANAGE_MEDS AND be a CARETAKER
+      if (requiredPermission === "CAN_MANAGE_MEDS") {
+        if (member.role === "CARETAKER" && member.permissions.includes("CAN_MANAGE_MEDS")) {
+          return { authorized: true, profile, memberRecord: member };
+        }
+        return { authorized: false, reason: "FORBIDDEN", profile, memberRecord: member };
       }
 
       // Check permission array

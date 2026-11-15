@@ -15,7 +15,7 @@ describe("CareNest RBAC & Server-side Authorization", () => {
     expect(access.reason).toBe("FORBIDDEN");
   });
 
-  it("permits authorized family admin to manage medications", async () => {
+  it("restricts medication management: denies family admin from managing meds, but permits viewing records and appointments", async () => {
     const adminUser = await prisma.user.findFirst({
       where: { role: "FAMILY", email: "sarah.vance@carenest.org" },
     });
@@ -25,11 +25,20 @@ describe("CareNest RBAC & Server-side Authorization", () => {
 
     if (!adminUser || !profile) return;
 
-    const access = await verifyProfileAccess(adminUser.id, profile.id, "CAN_MANAGE_MEDS");
-    expect(access.authorized).toBe(true);
+    // Family admin must NOT have permission to manage medications
+    const medAccess = await verifyProfileAccess(adminUser.id, profile.id, "CAN_MANAGE_MEDS");
+    expect(medAccess.authorized).toBe(false);
+    expect(medAccess.reason).toBe("MEDICATIONS_RESTRICTED_TO_CARETAKERS");
+
+    // Family admin CAN view records and manage appointments
+    const viewAccess = await verifyProfileAccess(adminUser.id, profile.id, "CAN_VIEW_RECORDS");
+    expect(viewAccess.authorized).toBe(true);
+
+    const apptAccess = await verifyProfileAccess(adminUser.id, profile.id, "CAN_MANAGE_APPOINTMENTS");
+    expect(apptAccess.authorized).toBe(true);
   });
 
-  it("permits caretaker to confirm dose and log care notes", async () => {
+  it("permits caretaker to manage medications, confirm dose and log care notes", async () => {
     const caretaker = await prisma.user.findFirst({
       where: { role: "CARETAKER", email: "marcus.reed@carenest.org" },
     });
@@ -38,6 +47,9 @@ describe("CareNest RBAC & Server-side Authorization", () => {
     });
 
     if (!caretaker || !profile) return;
+
+    const medAccess = await verifyProfileAccess(caretaker.id, profile.id, "CAN_MANAGE_MEDS");
+    expect(medAccess.authorized).toBe(true);
 
     const doseAccess = await verifyProfileAccess(caretaker.id, profile.id, "CAN_CONFIRM_DOSE");
     expect(doseAccess.authorized).toBe(true);

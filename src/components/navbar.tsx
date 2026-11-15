@@ -170,18 +170,6 @@ export function Navbar({
                 >
                   Family Overview
                 </Link>
-                <Link
-                  href="/dashboard/senior"
-                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 hover:text-teal-700 hover:bg-slate-50 dark:text-slate-400"
-                >
-                  Senior Mode View
-                </Link>
-                <Link
-                  href="/dashboard/caretaker"
-                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-slate-600 hover:text-teal-700 hover:bg-slate-50 dark:text-slate-400"
-                >
-                  Caretaker View
-                </Link>
               </>
             )}
           </nav>

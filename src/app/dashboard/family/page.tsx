@@ -43,7 +43,7 @@ export default async function FamilyDashboardPage({
     profiles.find((p) => p.name.includes("Eleanor")) ||
     profiles[0];
 
-  // Fetch full profile details
+  // Fetch full details of the active selected profile
   const fullProfile = await prisma.elderlyProfile.findUnique({
     where: { id: activeProfile.id },
     include: {
@@ -71,7 +71,7 @@ export default async function FamilyDashboardPage({
         orderBy: { appointmentDate: "asc" },
       },
       careNotes: {
-        take: 5,
+        take: 20,
         orderBy: { createdAt: "desc" },
         include: { author: { select: { id: true, name: true, role: true } } },
       },
@@ -81,6 +81,96 @@ export default async function FamilyDashboardPage({
   if (!fullProfile) {
     redirect("/dashboard/family");
   }
+
+  // Fetch summary metadata for all senior patient profiles registered & managed by this administrator
+  const managedSeniors = await Promise.all(
+    profiles.map(async (p) => {
+      const caretakerMember = await prisma.careCircleMember.findFirst({
+        where: {
+          careCircle: { elderlyProfileId: p.id },
+          role: "CARETAKER",
+          isActive: true,
+        },
+        include: {
+          user: { select: { id: true, name: true, phoneNumber: true, email: true } },
+        },
+      });
+
+      const medCount = await prisma.medication.count({
+        where: { elderlyProfileId: p.id, isArchived: false },
+      });
+
+      const apptCount = await prisma.appointment.count({
+        where: { elderlyProfileId: p.id, status: "UPCOMING" },
+      });
+
+      return {
+        id: p.id,
+        name: p.name,
+        preferredName: p.preferredName,
+        dateOfBirth: p.dateOfBirth ? p.dateOfBirth.toISOString() : null,
+        gender: p.gender,
+        bloodGroup: p.bloodGroup,
+        allergies: p.allergies || [],
+        medicalConditions: p.medicalConditions || [],
+        emergencyContactName: p.emergencyContactName,
+        emergencyContactPhone: p.emergencyContactPhone,
+        emergencyContactRelation: p.emergencyContactRelation || "Family Member",
+        notes: p.notes,
+        avatarUrl: p.avatarUrl,
+        caretaker: caretakerMember?.user
+          ? {
+              id: caretakerMember.user.id,
+              name: caretakerMember.user.name,
+              phoneNumber: caretakerMember.user.phoneNumber,
+              email: caretakerMember.user.email,
+            }
+          : null,
+        medicationsCount: medCount,
+        upcomingAppointmentsCount: apptCount,
+      };
+    })
+  );
+
+  // Health records & vitals for the active profile
+  const vitalsNotes = await prisma.careNote.findMany({
+    where: {
+      elderlyProfileId: fullProfile.id,
+    },
+    orderBy: { createdAt: "desc" },
+    take: 15,
+  });
+
+  const parsedVitals = vitalsNotes
+    .filter((n) => n.vitalSigns !== null && typeof n.vitalSigns === "object")
+    .map((n) => {
+      const v = (n.vitalSigns || {}) as Record<string, unknown>;
+      return {
+        id: n.id,
+        createdAt: n.createdAt.toISOString(),
+        heartRate: typeof v.heartRate === "number" ? v.heartRate : null,
+        bloodGlucose: typeof v.bloodGlucose === "number" ? v.bloodGlucose : null,
+        bloodPressure: typeof v.bloodPressure === "string" ? v.bloodPressure : null,
+        systolic: typeof v.systolic === "number" ? v.systolic : null,
+        diastolic: typeof v.diastolic === "number" ? v.diastolic : null,
+        temperature: typeof v.temperature === "number" ? v.temperature : null,
+        oxygenSaturation: typeof v.oxygenSaturation === "number" ? v.oxygenSaturation : null,
+        weight: typeof v.weight === "number" ? v.weight : null,
+        notes: n.content,
+      };
+    });
+
+  // Active profile's assigned caretaker (or null if pending)
+  const activeCaretakerMember = fullProfile.careCircles[0]?.members?.find(
+    (m) => m.role === "CARETAKER" && m.isActive
+  );
+  const activeCaretaker = activeCaretakerMember?.user
+    ? {
+        name: activeCaretakerMember.user.name,
+        phoneNumber: activeCaretakerMember.user.phoneNumber,
+        email: activeCaretakerMember.user.email,
+      }
+    : null;
 
   // Analytics, Refill Projections, and Timeline
   const [analytics, refillEstimates, timeline] = await Promise.all([
@@ -101,7 +191,15 @@ export default async function FamilyDashboardPage({
       />
       <main className="flex-1">
         <FamilyDashboardClient
+          adminUser={{
+            id: user.id,
+            name: user.name || "Family Administrator",
+            email: user.email || "",
+          }}
+          managedSeniors={managedSeniors}
           profile={fullProfile}
+          activeCaretaker={activeCaretaker}
+          vitalsHistory={parsedVitals}
           availableProfiles={profiles.map((p) => ({
             id: p.id,
             name: p.name,

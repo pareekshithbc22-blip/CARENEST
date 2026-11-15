@@ -222,14 +222,10 @@ export default async function SeniorDashboardPage() {
             caretakerMember
               ? {
                   name: caretakerMember.user.name,
-                  phone: caretakerMember.user.phoneNumber || "6361963006",
+                  phone: caretakerMember.user.phoneNumber || null,
                   role: "Licensed Nurse / Caretaker",
                 }
-              : {
-                  name: "Marcus Reed, RN",
-                  phone: "6361963006",
-                  role: "Licensed Nurse / Caretaker",
-                }
+              : null
           }
         />
       </main>

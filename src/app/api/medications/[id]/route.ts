@@ -39,6 +39,14 @@ export async function PUT(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Medication management is restricted to authorized Caretakers
+  if (user.role === "FAMILY" || user.role === "SENIOR") {
+    return NextResponse.json(
+      { error: "Medication modification is restricted to authorized licensed Caretakers. Family Administrators have read-only access." },
+      { status: 403 }
+    );
+  }
+
   const { id } = await params;
   const med = await prisma.medication.findUnique({ where: { id } });
   if (!med) {
@@ -116,6 +124,14 @@ export async function DELETE(
   const user = await getCurrentUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Discontinuing medications is restricted to authorized Caretakers
+  if (user.role === "FAMILY" || user.role === "SENIOR") {
+    return NextResponse.json(
+      { error: "Discontinuing or deleting medications is restricted to authorized licensed Caretakers. Family Administrators have read-only access." },
+      { status: 403 }
+    );
   }
 
   const { id } = await params;

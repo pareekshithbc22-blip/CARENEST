@@ -80,16 +80,15 @@ export async function POST(req: Request) {
         },
       });
 
-      // 3. Add Creator as Circle Admin
+      // 3. Add Creator as Circle Admin (Medication management is restricted to Caretakers)
       await tx.careCircleMember.create({
         data: {
           careCircleId: circle.id,
           userId: user.id,
           role: "ADMIN",
           permissions: [
-            "CAN_MANAGE_MEDS",
-            "CAN_CONFIRM_DOSE",
             "CAN_VIEW_RECORDS",
+            "CAN_CONFIRM_DOSE",
             "CAN_MANAGE_APPOINTMENTS",
             "CAN_RECEIVE_ESCALATIONS",
             "CAN_MANAGE_CIRCLE",
@@ -99,11 +98,13 @@ export async function POST(req: Request) {
         },
       });
 
-      // 4. Automatic Caretaker Assignment (Assign active caretaker with lowest patient workload)
+      // 4. Automatic Caretaker Assignment (Assign active registered Caretaker with lowest patient workload)
+      // Ensure the Family Administrator is never assigned as Caretaker
       const availableCaretakers = await tx.user.findMany({
         where: {
           role: "CARETAKER",
           isActive: true,
+          id: { not: user.id },
         },
         include: {
           circleMemberships: {
@@ -125,10 +126,12 @@ export async function POST(req: Request) {
             userId: selectedCaretaker.id,
             role: "CARETAKER",
             permissions: [
+              "CAN_MANAGE_MEDS",
               "CAN_VIEW_RECORDS",
               "CAN_CONFIRM_DOSE",
               "CAN_LOG_CARE_NOTES",
               "CAN_COMPLETE_TASKS",
+              "CAN_RECEIVE_ESCALATIONS",
             ],
           },
         });
