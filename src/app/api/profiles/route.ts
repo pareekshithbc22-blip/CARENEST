@@ -41,9 +41,16 @@ export async function POST(req: Request) {
     }
 
     const data = validated.data;
+    if (data.seniorPin && data.confirmPin && data.seniorPin !== data.confirmPin) {
+      return NextResponse.json(
+        { error: "Senior PIN and Confirm PIN do not match. Please verify your 4-digit PIN." },
+        { status: 400 }
+      );
+    }
+
     const pinHash = data.seniorPin ? await bcrypt.hash(data.seniorPin, 10) : null;
 
-    const newProfile = await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
       // 1. Create Elderly Profile
       const profile = await tx.elderlyProfile.create({
         data: {
@@ -92,7 +99,67 @@ export async function POST(req: Request) {
         },
       });
 
-      // 4. Audit Log
+      // 4. Automatic Caretaker Assignment (Assign active caretaker with lowest patient workload)
+      const availableCaretakers = await tx.user.findMany({
+        where: {
+          role: "CARETAKER",
+          isActive: true,
+        },
+        include: {
+          circleMemberships: {
+            where: { role: "CARETAKER", isActive: true },
+          },
+        },
+      });
+
+      let assignedCaretaker: { id: string; name: string; phoneNumber: string | null } | null = null;
+
+      if (availableCaretakers.length > 0) {
+        availableCaretakers.sort(
+          (a, b) => a.circleMemberships.length - b.circleMemberships.length
+        );
+        const selectedCaretaker = availableCaretakers[0];
+        await tx.careCircleMember.create({
+          data: {
+            careCircleId: circle.id,
+            userId: selectedCaretaker.id,
+            role: "CARETAKER",
+            permissions: [
+              "CAN_VIEW_RECORDS",
+              "CAN_CONFIRM_DOSE",
+              "CAN_LOG_CARE_NOTES",
+              "CAN_COMPLETE_TASKS",
+            ],
+          },
+        });
+        assignedCaretaker = {
+          id: selectedCaretaker.id,
+          name: selectedCaretaker.name,
+          phoneNumber: selectedCaretaker.phoneNumber,
+        };
+      }
+
+      // 5. Establish Linked Senior User Account for PIN Login
+      const seniorUser = await tx.user.create({
+        data: {
+          email: `senior.${profile.id.slice(0, 8)}@carenest.local`,
+          name: profile.name,
+          passwordHash: pinHash || (await bcrypt.hash("1234", 10)),
+          role: "SENIOR",
+          phoneNumber: profile.emergencyContactPhone,
+        },
+      });
+
+      await tx.careCircleMember.create({
+        data: {
+          careCircleId: circle.id,
+          userId: seniorUser.id,
+          role: "SENIOR",
+          permissions: ["CAN_VIEW_RECORDS", "CAN_CONFIRM_DOSE"],
+        },
+      });
+
+      // 6. Audit Log
       await tx.auditLog.create({
         data: {
           elderlyProfileId: profile.id,
@@ -101,14 +168,24 @@ export async function POST(req: Request) {
           action: "ELDERLY_PROFILE_CREATED",
           entityType: "ElderlyProfile",
           entityId: profile.id,
-          details: { name: profile.name, createdByRole: user.role },
+          details: {
+            name: profile.name,
+            createdByRole: user.role,
+            assignedCaretakerId: assignedCaretaker?.id,
+          },
         },
       });
 
-      return profile;
+      return { profile, assignedCaretaker };
     });
 
-    return NextResponse.json({ profile: newProfile }, { status: 201 });
+    return NextResponse.json(
+      {
+        profile: result.profile,
+        assignedCaretaker: result.assignedCaretaker,
+      },
+      { status: 201 }
+    );
   } catch (err: any) {
     console.error("[Profile POST Error]:", err);
     return NextResponse.json(

@@ -152,18 +152,20 @@ export default function RegisterPage() {
                   onChange={(e) => setRole(e.target.value)}
                   className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
                 >
-                  <option value="FAMILY">Family Coordinator</option>
+                  <option value="FAMILY">Family Guardian / Administrator</option>
                   <option value="CARETAKER">Licensed Nurse / Caretaker</option>
-                  <option value="SENIOR">Senior Individual</option>
                 </select>
               </div>
 
               <div className="space-y-1">
-                <Label htmlFor="phone">Phone Number</Label>
+                <Label htmlFor="phone">
+                  Phone Number {role === "CARETAKER" ? "*" : "(Optional)"}
+                </Label>
                 <div className="relative">
                   <Phone className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
                   <Input
                     id="phone"
+                    required={role === "CARETAKER"}
                     placeholder="+1 (555) 000-0000"
                     className="pl-9 text-xs"
                     value={phoneNumber}
@@ -171,6 +173,10 @@ export default function RegisterPage() {
                   />
                 </div>
               </div>
+            </div>
+
+            <div className="rounded-xl bg-teal-50/70 border border-teal-200 p-3 text-[11px] text-teal-900 leading-relaxed">
+              <strong>Notice for Senior Patients:</strong> Senior accounts are registered and configured directly by their authorized Family Guardian with an accessible 4-digit PIN for one-step login.
             </div>
 
             <Button

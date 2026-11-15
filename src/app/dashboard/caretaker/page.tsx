@@ -82,6 +82,11 @@ export default async function CaretakerDashboardPage() {
             id: p.id,
             name: p.name,
             preferredName: p.preferredName,
+            dateOfBirth: p.dateOfBirth ? p.dateOfBirth.toISOString() : undefined,
+            emergencyContactName: p.emergencyContactName,
+            emergencyContactPhone: p.emergencyContactPhone,
+            medicalConditions: p.medicalConditions,
+            allergies: p.allergies,
           }))}
         />
       </main>

@@ -5,6 +5,7 @@ import {
   MedicationCreateSchema,
   DoseSkipSchema,
   CareNoteCreateSchema,
+  HealthMeasurementCreateSchema,
 } from "@/lib/validations";
 
 describe("CareNest Zod Validation Schemas", () => {
@@ -95,5 +96,28 @@ describe("CareNest Zod Validation Schemas", () => {
 
     const res = CareNoteCreateSchema.safeParse(note);
     expect(res.success).toBe(true);
+  });
+
+  it("validates health measurement creation with physiological bounds", () => {
+    const validMeasurement = {
+      elderlyProfileId: "123e4567-e89b-12d3-a456-426614174000",
+      heartRate: 74,
+      bloodGlucose: 105,
+      systolic: 120,
+      diastolic: 80,
+      temperature: 36.6,
+      oxygenSaturation: 98,
+      weight: 68.5,
+      source: "Senior Patient (Self-Reported)",
+    };
+
+    const res = HealthMeasurementCreateSchema.safeParse(validMeasurement);
+    expect(res.success).toBe(true);
+
+    const invalidMeasurement = {
+      elderlyProfileId: "123e4567-e89b-12d3-a456-426614174000",
+      heartRate: 999, // Outside human bounds
+    };
+    expect(HealthMeasurementCreateSchema.safeParse(invalidMeasurement).success).toBe(false);
   });
 });

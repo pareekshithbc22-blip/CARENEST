@@ -32,6 +32,7 @@ export function AddElderlyProfileModal({
   const [notes, setNotes] = React.useState("");
   const [isSeniorModeActive, setIsSeniorModeActive] = React.useState(true);
   const [seniorPin, setSeniorPin] = React.useState("1234");
+  const [confirmPin, setConfirmPin] = React.useState("1234");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -39,6 +40,20 @@ export function AddElderlyProfileModal({
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    // Validate 4-digit PIN
+    if (seniorPin) {
+      if (!/^\d{4}$/.test(seniorPin)) {
+        setError("Senior PIN must be exactly 4 numeric digits (e.g. 1234).");
+        setLoading(false);
+        return;
+      }
+      if (seniorPin !== confirmPin) {
+        setError("Senior PIN and Confirm PIN do not match. Please verify.");
+        setLoading(false);
+        return;
+      }
+    }
 
     const conditionsArray = medicalConditions
       ? medicalConditions.split(",").map((s) => s.trim()).filter(Boolean)
@@ -247,19 +262,38 @@ export function AddElderlyProfileModal({
               </Label>
             </div>
 
-            <div className="mt-2 grid grid-cols-2 gap-3">
+            <div className="mt-3 grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label htmlFor="prof-pin">Senior Quick PIN (Optional)</Label>
+                <Label htmlFor="prof-pin">Senior 4-Digit PIN *</Label>
                 <Input
                   id="prof-pin"
                   placeholder="1234"
-                  maxLength={6}
+                  maxLength={4}
+                  required
                   value={seniorPin}
-                  onChange={(e) => setSeniorPin(e.target.value)}
-                  className="font-mono"
+                  onChange={(e) => setSeniorPin(e.target.value.replace(/\D/g, ""))}
+                  className="font-mono text-center tracking-widest font-bold"
                 />
-                <p className="text-[10px] text-slate-400">Allows elderly person to check in quickly with a 4-digit PIN</p>
+                <p className="text-[10px] text-slate-400">4-digit PIN for simplified senior login</p>
               </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="prof-cpin">Confirm 4-Digit PIN *</Label>
+                <Input
+                  id="prof-cpin"
+                  placeholder="1234"
+                  maxLength={4}
+                  required
+                  value={confirmPin}
+                  onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, ""))}
+                  className="font-mono text-center tracking-widest font-bold"
+                />
+                <p className="text-[10px] text-slate-400">Must match the 4-digit PIN above</p>
+              </div>
+            </div>
+
+            <div className="mt-2 text-[11px] text-teal-800 bg-teal-50/70 border border-teal-200 rounded-lg p-2 flex items-center space-x-1.5">
+              <span>Automatic Caretaker Assignment: An active licensed caretaker will be allocated to this circle upon creation.</span>
             </div>
           </div>
 

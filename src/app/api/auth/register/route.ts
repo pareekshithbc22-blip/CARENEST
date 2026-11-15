@@ -16,6 +16,12 @@ export async function POST(req: Request) {
     }
 
     const { email, password, name, role, phoneNumber } = validated.data;
+    if (role === "CARETAKER" && (!phoneNumber || phoneNumber.trim().length < 7)) {
+      return NextResponse.json(
+        { error: "A valid phone number is required when registering as a Licensed Caretaker." },
+        { status: 400 }
+      );
+    }
     const normalizedEmail = email.toLowerCase().trim();
 
     const existingUser = await prisma.user.findUnique({

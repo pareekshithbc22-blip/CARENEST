@@ -21,7 +21,8 @@ export const ProfileCreateSchema = z.object({
   emergencyContactRelation: z.string().optional(),
   notes: z.string().optional(),
   isSeniorModeActive: z.boolean().default(true),
-  seniorPin: z.string().min(4).max(6).optional(),
+  seniorPin: z.string().regex(/^\d{4}$/, "PIN must be exactly 4 numeric digits").optional().nullable(),
+  confirmPin: z.string().optional().nullable(),
 });
 
 export const MedicationCreateSchema = z.object({
@@ -116,3 +117,19 @@ export const CareCircleInviteSchema = z.object({
   email: z.string().email("Valid recipient email is required"),
   role: z.enum(["ADMIN", "FAMILY_MEMBER", "CARETAKER", "SENIOR"]).default("FAMILY_MEMBER"),
 });
+
+export const HealthMeasurementCreateSchema = z.object({
+  elderlyProfileId: z.string().uuid("Valid profile ID is required"),
+  heartRate: z.number().min(30).max(250).optional().nullable(),
+  bloodGlucose: z.number().min(20).max(800).optional().nullable(),
+  systolic: z.number().min(50).max(300).optional().nullable(),
+  diastolic: z.number().min(30).max(200).optional().nullable(),
+  bloodPressure: z.string().optional().nullable(),
+  temperature: z.number().min(30).max(45).optional().nullable(),
+  oxygenSaturation: z.number().min(50).max(100).optional().nullable(),
+  weight: z.number().min(10).max(400).optional().nullable(),
+  source: z.string().default("Senior Patient (Self-Reported)"),
+  notes: z.string().optional().nullable(),
+  recordedAt: z.string().optional(),
+});
+

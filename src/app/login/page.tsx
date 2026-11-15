@@ -4,12 +4,13 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Heart, Sparkles, KeyRound, Mail, Lock } from "lucide-react";
+import { Heart, KeyRound, Mail, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export default function LoginPage() {
+
   const router = useRouter();
   const [callbackUrl, setCallbackUrl] = React.useState("/dashboard/family");
 
@@ -25,6 +26,7 @@ export default function LoginPage() {
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [pin, setPin] = React.useState("");
+  const [patientIdentifier, setPatientIdentifier] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -71,39 +73,15 @@ export default function LoginPage() {
 
     const res = await signIn("credentials", {
       pin,
+      patientIdentifier: patientIdentifier.trim() || undefined,
       redirect: false,
     });
 
     if (res?.error) {
-      setError("Invalid Senior PIN. Please verify your 4-digit PIN.");
+      setError("Invalid Senior PIN or patient identifier. Please verify your 4-digit PIN with your family guardian.");
       setLoading(false);
     } else {
-      router.push("/dashboard/senior");
-      router.refresh();
-    }
-  };
-
-  const handleQuickDemo = async (demoEmail: string, demoRole: string) => {
-    setLoading(true);
-    setError(null);
-    const res = await signIn("credentials", {
-      email: demoEmail,
-      password: "CareNest2026!",
-      redirect: false,
-    });
-
-    if (!res?.error) {
-      if (demoRole === "SENIOR") {
-        router.push("/dashboard/senior");
-      } else if (demoRole === "CARETAKER") {
-        router.push("/dashboard/caretaker");
-      } else {
-        router.push("/dashboard/family");
-      }
-      router.refresh();
-    } else {
-      setError("Demo authentication failed.");
-      setLoading(false);
+      window.location.href = "/dashboard/senior";
     }
   };
 
@@ -127,43 +105,6 @@ export default function LoginPage() {
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        {/* Quick Demo Login Pill for Hackathon Evaluators */}
-        <div className="mb-6 rounded-2xl border-2 border-amber-300 bg-amber-50/80 p-4 shadow-sm">
-          <div className="flex items-center space-x-2 text-xs font-bold uppercase tracking-wider text-amber-900 mb-2">
-            <Sparkles className="h-4 w-4 text-amber-600" />
-            <span>Instant Demo Logins</span>
-          </div>
-          <p className="text-[11px] text-amber-800 mb-3">
-            Click any button below to instantly sign in with pre-seeded demo accounts:
-          </p>
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => handleQuickDemo("eleanor.vance@carenest.org", "SENIOR")}
-              className="rounded-xl border border-teal-300 bg-white p-2 text-center hover:bg-teal-50 transition-colors"
-            >
-              <span className="block text-[11px] font-bold text-slate-900">Senior</span>
-              <span className="text-[10px] text-teal-700 font-medium">Eleanor (PIN)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickDemo("sarah.vance@carenest.org", "FAMILY")}
-              className="rounded-xl border border-slate-300 bg-white p-2 text-center hover:bg-slate-50 transition-colors"
-            >
-              <span className="block text-[11px] font-bold text-slate-900">Family</span>
-              <span className="text-[10px] text-slate-600 font-medium">Sarah Vance</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickDemo("marcus.reed@carenest.org", "CARETAKER")}
-              className="rounded-xl border border-sky-300 bg-white p-2 text-center hover:bg-sky-50 transition-colors"
-            >
-              <span className="block text-[11px] font-bold text-slate-900">Caretaker</span>
-              <span className="text-[10px] text-sky-700 font-medium">Marcus, RN</span>
-            </button>
-          </div>
-        </div>
-
         {/* Main Card */}
         <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-xl">
           {/* Mode Switcher */}
@@ -184,7 +125,7 @@ export default function LoginPage() {
                 mode === "pin" ? "bg-teal-700 text-white shadow-xs" : "text-slate-500 hover:text-slate-900"
               }`}
             >
-              Senior Quick PIN (1234)
+              Senior Patient PIN Login
             </button>
           </div>
 
@@ -237,29 +178,48 @@ export default function LoginPage() {
               </Button>
             </form>
           ) : (
-            <form onSubmit={handlePinSubmit} className="space-y-6">
+            <form onSubmit={handlePinSubmit} className="space-y-5">
               <div className="text-center space-y-2">
                 <div className="flex h-12 w-12 mx-auto items-center justify-center rounded-full bg-teal-100 text-teal-800">
                   <KeyRound className="h-6 w-6 stroke-2" />
                 </div>
-                <h3 className="text-base font-black text-slate-900">Enter Your 4-Digit Senior PIN</h3>
+                <h3 className="text-base font-black text-slate-900">Senior Patient PIN Login</h3>
                 <p className="text-xs text-slate-500">
-                  Simplified one-step access for seniors. Demo PIN: <strong className="text-teal-700">1234</strong>
+                  Enter the 4-digit PIN registered by your family guardian.
                 </p>
               </div>
 
-              <div className="max-w-xs mx-auto">
+              <div className="space-y-1">
+                <Label htmlFor="patient-id" className="text-xs font-semibold text-slate-700">
+                  Patient Phone or Name (Optional if PIN is unique)
+                </Label>
                 <Input
-                  id="senior-pin"
-                  type="password"
-                  maxLength={6}
-                  required
-                  placeholder="••••"
-                  autoFocus
-                  className="h-14 text-center text-3xl font-mono tracking-widest"
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
+                  id="patient-id"
+                  placeholder="e.g. Eleanor or registered phone"
+                  className="h-10 text-xs"
+                  value={patientIdentifier}
+                  onChange={(e) => setPatientIdentifier(e.target.value)}
                 />
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="senior-pin" className="text-xs font-bold text-slate-900 text-center block">
+                  4-Digit Numeric PIN *
+                </Label>
+                <div className="max-w-[200px] mx-auto">
+                  <Input
+                    id="senior-pin"
+                    type="password"
+                    maxLength={4}
+                    pattern="[0-9]{4}"
+                    required
+                    placeholder="••••"
+                    autoFocus
+                    className="h-14 text-center text-3xl font-mono tracking-widest font-black"
+                    value={pin}
+                    onChange={(e) => setPin(e.target.value.replace(/\D/g, ""))}
+                  />
+                </div>
               </div>
 
               <Button

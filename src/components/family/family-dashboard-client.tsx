@@ -752,7 +752,12 @@ export function FamilyDashboardClient({
                           <CardTitle className="text-sm font-bold text-slate-900 dark:text-white">
                             {m.user?.name}
                           </CardTitle>
-                          <span className="text-[11px] text-slate-400">{m.user?.email}</span>
+                          <span className="text-[11px] text-slate-400 block">{m.user?.email}</span>
+                          {m.user?.phoneNumber && (
+                            <span className="text-[11px] font-semibold text-teal-700 dark:text-teal-400 block">
+                              📞 {m.user.phoneNumber}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <Badge variant={m.role === "ADMIN" ? "default" : m.role === "CARETAKER" ? "info" : "secondary"} className="text-[10px]">

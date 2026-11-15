@@ -9,23 +9,9 @@ import { AddElderlyProfileModal } from "@/components/family/add-elderly-profile-
 export function FamilyOnboarding({ userName }: { userName: string }) {
   const router = useRouter();
   const [showAddModal, setShowAddModal] = React.useState(false);
-  const [isConnectingDemo, setIsConnectingDemo] = React.useState(false);
-
-  const handleConnectDemo = async () => {
-    setIsConnectingDemo(true);
-    try {
-      const res = await fetch("/api/profiles/connect-demo", { method: "POST" });
-      if (res.ok) {
-        router.refresh();
-      }
-    } catch {
-      // quiet fail
-    } finally {
-      setIsConnectingDemo(false);
-    }
-  };
 
   return (
+
     <div className="max-w-2xl mx-auto bg-white p-8 sm:p-10 rounded-2xl shadow-xl border border-slate-200 text-center space-y-6">
       <div className="flex h-16 w-16 mx-auto items-center justify-center rounded-2xl bg-teal-100 text-teal-800 shadow-md">
         <Heart className="h-8 w-8 stroke-2 fill-teal-50" />
@@ -76,22 +62,12 @@ export function FamilyOnboarding({ userName }: { userName: string }) {
         </div>
       </div>
 
-      <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+      <div className="pt-4 flex items-center justify-center">
         <Button
           onClick={() => setShowAddModal(true)}
-          className="w-full sm:w-auto h-12 px-6 bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm shadow-md"
+          className="w-full sm:w-auto h-12 px-8 bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm shadow-md"
         >
           <Plus className="h-4 w-4 mr-2" /> Create First Elderly Profile
-        </Button>
-
-        <Button
-          variant="outline"
-          onClick={handleConnectDemo}
-          disabled={isConnectingDemo}
-          className="w-full sm:w-auto h-12 px-6 border-slate-300 text-slate-700 font-semibold text-sm hover:bg-slate-50"
-        >
-          <Sparkles className="h-4 w-4 mr-2 text-amber-600" />
-          {isConnectingDemo ? "Connecting..." : "Load Pre-seeded Demo Profiles"}
         </Button>
       </div>
 

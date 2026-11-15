@@ -2,16 +2,13 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useSession, signIn, signOut } from "next-auth/react";
+import { usePathname } from "next/navigation";
+import { useSession, signOut } from "next-auth/react";
 import {
   Heart,
   Bell,
   LogOut,
-  ChevronDown,
-  Sparkles,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 interface NotificationItem {
@@ -34,13 +31,10 @@ export function Navbar({
 }) {
   const { data: session } = useSession();
   const pathname = usePathname();
-  const router = useRouter();
 
   const [notifications, setNotifications] = React.useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = React.useState(0);
   const [showNotifications, setShowNotifications] = React.useState(false);
-  const [showDemoMenu, setShowDemoMenu] = React.useState(false);
-  const [isSwitching, setIsSwitching] = React.useState(false);
 
   // Fetch notifications
   const fetchNotifications = React.useCallback(async () => {
@@ -73,19 +67,6 @@ export function Navbar({
     } catch {
       // ignore
     }
-  };
-
-  // Instant demo role switch
-  const handleDemoSwitch = async (email: string) => {
-    setIsSwitching(true);
-    setShowDemoMenu(false);
-    await signIn("credentials", {
-      email,
-      password: "CareNest2026!",
-      redirect: false,
-    });
-    setIsSwitching(false);
-    router.refresh();
   };
 
   const userRole = session?.user?.role || "GUEST";
@@ -223,62 +204,6 @@ export function Navbar({
 
         {/* Right Action Bar */}
         <div className="flex items-center space-x-2 sm:space-x-3">
-          {/* Hackathon Evaluator Quick Switcher (Hidden on landing page top navigation) */}
-          {pathname !== "/" && (
-            <div className="relative">
-              <button
-                onClick={() => setShowDemoMenu(!showDemoMenu)}
-                className="flex items-center space-x-1.5 rounded-lg border border-amber-300 bg-amber-50/90 px-2.5 py-1 text-xs font-semibold text-amber-900 hover:bg-amber-100 transition-colors dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-300"
-                title="Quickly switch between Eleanor (Senior), Sarah (Family), or Marcus (Caretaker)"
-              >
-                <Sparkles className="h-3.5 w-3.5 text-amber-600" />
-                <span className="hidden sm:inline">Role Switcher</span>
-                <ChevronDown className="h-3 w-3" />
-              </button>
-
-              {showDemoMenu && (
-                <div className="absolute right-0 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-xl z-50 dark:border-slate-800 dark:bg-slate-900 animate-in fade-in">
-                  <div className="px-2 py-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                    Select Perspective (Instant Login)
-                  </div>
-                  <button
-                    disabled={isSwitching}
-                    onClick={() => handleDemoSwitch("eleanor.vance@carenest.org")}
-                    className="w-full text-left rounded-lg p-2 text-xs hover:bg-teal-50 dark:hover:bg-slate-800 flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="font-semibold text-slate-900 dark:text-white">Eleanor Vance</div>
-                      <div className="text-[11px] text-teal-700 font-medium">Senior Patient (Senior Mode)</div>
-                    </div>
-                    <Badge variant="outline" className="text-[10px]">PIN: 1234</Badge>
-                  </button>
-                  <button
-                    disabled={isSwitching}
-                    onClick={() => handleDemoSwitch("sarah.vance@carenest.org")}
-                    className="w-full text-left rounded-lg p-2 text-xs hover:bg-teal-50 dark:hover:bg-slate-800 flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="font-semibold text-slate-900 dark:text-white">Sarah Vance</div>
-                      <div className="text-[11px] text-slate-500">Family Admin & Daughter</div>
-                    </div>
-                    <Badge variant="secondary" className="text-[10px]">Admin</Badge>
-                  </button>
-                  <button
-                    disabled={isSwitching}
-                    onClick={() => handleDemoSwitch("marcus.reed@carenest.org")}
-                    className="w-full text-left rounded-lg p-2 text-xs hover:bg-teal-50 dark:hover:bg-slate-800 flex items-center justify-between"
-                  >
-                    <div>
-                      <div className="font-semibold text-slate-900 dark:text-white">Marcus Reed, RN</div>
-                      <div className="text-[11px] text-sky-700 font-medium">Licensed Caretaker / Nurse</div>
-                    </div>
-                    <Badge variant="info" className="text-[10px]">Caretaker</Badge>
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Notifications Dropdown */}
           {session && (
             <div className="relative">

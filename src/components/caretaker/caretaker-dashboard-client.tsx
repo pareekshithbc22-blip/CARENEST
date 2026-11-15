@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { CaretakerPatientMonitor } from "@/components/caretaker/caretaker-patient-monitor";
 
 interface CaretakerDashboardClientProps {
   caretakerName: string;
@@ -140,6 +141,15 @@ export function CaretakerDashboardClient({
             </select>
           </div>
         </div>
+
+        {/* Live Patient Health Telemetry & Multi-Patient Monitoring */}
+        {profiles.length > 0 && (
+          <CaretakerPatientMonitor
+            profiles={profiles}
+            activeProfileId={selectedProfileId}
+            onSelectProfile={(id) => setSelectedProfileId(id)}
+          />
+        )}
 
         {/* 2-Column Caretaker Action Layout */}
         <div className="grid gap-8 lg:grid-cols-12">
