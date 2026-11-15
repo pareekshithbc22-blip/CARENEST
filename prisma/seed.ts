@@ -37,6 +37,7 @@ async function main() {
   // ========================================================
   // 1. ORIGINAL CORE USERS (PRESERVED FOR TEST SUITES)
   // ========================================================
+  const nowVerified = new Date();
   const sarah = await prisma.user.create({
     data: {
       email: "sarah.vance@carenest.org",
@@ -45,6 +46,8 @@ async function main() {
       role: "FAMILY",
       phoneNumber: "+1 (555) 234-5678",
       avatarUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -56,6 +59,8 @@ async function main() {
       role: "SENIOR",
       phoneNumber: "+1 (555) 345-6789",
       avatarUrl: "https://images.unsplash.com/photo-1581579438747-1dc8d17bbce4?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -67,6 +72,8 @@ async function main() {
       role: "CARETAKER",
       phoneNumber: "+1 (555) 456-7890",
       avatarUrl: "https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -78,6 +85,8 @@ async function main() {
       role: "FAMILY",
       phoneNumber: "+1 (555) 567-8901",
       avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -94,6 +103,8 @@ async function main() {
       role: "FAMILY",
       phoneNumber: "+1 (555) 601-2345",
       avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -105,6 +116,8 @@ async function main() {
       role: "FAMILY",
       phoneNumber: "+1 (555) 602-3456",
       avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -117,6 +130,8 @@ async function main() {
       role: "CARETAKER",
       phoneNumber: "+1 (555) 701-4567",
       avatarUrl: "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -128,6 +143,8 @@ async function main() {
       role: "CARETAKER",
       phoneNumber: "+1 (555) 702-5678",
       avatarUrl: "https://images.unsplash.com/photo-1594824813511-20925e0b0dbd?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -140,6 +157,8 @@ async function main() {
       role: "SENIOR",
       phoneNumber: "+1 (555) 801-6789",
       avatarUrl: "https://images.unsplash.com/photo-1545167622-3a6ac756afa4?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -151,6 +170,8 @@ async function main() {
       role: "SENIOR",
       phoneNumber: "+1 (555) 802-7890",
       avatarUrl: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -162,6 +183,8 @@ async function main() {
       role: "SENIOR",
       phoneNumber: "+1 (555) 803-8901",
       avatarUrl: "https://images.unsplash.com/photo-1544717305-2782549b5136?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 
@@ -173,6 +196,8 @@ async function main() {
       role: "SENIOR",
       phoneNumber: "+1 (555) 804-9012",
       avatarUrl: "https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
     },
   });
 

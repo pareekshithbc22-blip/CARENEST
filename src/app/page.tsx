@@ -21,7 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Navbar } from "@/components/navbar";
 
 export const metadata = {
-  title: "CareNest - Intelligent Elderly Care & Family Coordination Platform",
+  title: "CARENEST | Connected Care Platform",
   description:
     "One connected circle of care. Every dose. Every appointment. Everyone informed.",
 };

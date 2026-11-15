@@ -13,12 +13,14 @@ export default function LoginPage() {
 
   const router = useRouter();
   const [callbackUrl, setCallbackUrl] = React.useState("/dashboard/family");
+  const [verifiedNotice, setVerifiedNotice] = React.useState(false);
 
   React.useEffect(() => {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const cb = params.get("callbackUrl");
       if (cb) setCallbackUrl(cb);
+      if (params.get("verified") === "true") setVerifiedNotice(true);
     }
   }, []);
 
@@ -129,6 +131,12 @@ export default function LoginPage() {
               Senior Patient PIN Login
             </button>
           </div>
+
+          {verifiedNotice && (
+            <div className="mb-4 rounded-xl bg-teal-50 border border-teal-200 p-3 text-xs font-semibold text-teal-800">
+              Email verified successfully! Please sign in with your credentials to access your dashboard.
+            </div>
+          )}
 
           {error && (
             <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-bold text-rose-800">

@@ -5,6 +5,7 @@ import { verifyCircleAdmin } from "@/lib/permissions";
 import { CareCircleInviteSchema } from "@/lib/validations";
 import { sendCareCircleInvitationEmail } from "@/lib/email/service";
 import { prisma } from "@/lib/prisma";
+import { getAppUrl } from "@/lib/config";
 
 export async function POST(
   req: Request,
@@ -106,7 +107,7 @@ export async function POST(
       return inv;
     });
 
-    const appUrl = process.env.NEXTAUTH_URL || "http://localhost:3000";
+    const appUrl = getAppUrl();
     const invitationUrl = `${appUrl}/invite/${token}`;
 
     // Send Invitation Email

@@ -3,8 +3,19 @@ import "./globals.css";
 import { Providers } from "@/components/providers";
 
 export const metadata: Metadata = {
-  title: "CareNest - Intelligent Elderly Care & Family Coordination Platform",
-  description: "One connected circle of care. Every dose. Every appointment. Everyone informed.",
+  title: {
+    default: "CARENEST | Connected Care Platform",
+    template: "%s | CARENEST",
+  },
+  description:
+    "CARENEST - One connected circle of care. Every dose. Every appointment. Everyone informed. Intelligent healthcare coordination ecosystem.",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export default function RootLayout({

@@ -4,6 +4,8 @@
  * and local development fallback with audit tracking.
  */
 
+import { getAppUrl } from "@/lib/config";
+
 export interface EmailResult {
   success: boolean;
   messageId?: string;
@@ -17,7 +19,7 @@ export interface SendEmailOptions {
   subject: string;
   html: string;
   text?: string;
-  type?: "MEDICATION" | "MISSED_DOSE" | "ESCALATION" | "APPOINTMENT" | "INVITATION";
+  type?: "MEDICATION" | "MISSED_DOSE" | "ESCALATION" | "APPOINTMENT" | "INVITATION" | "OTP_VERIFICATION";
 }
 
 /**
@@ -186,7 +188,7 @@ export async function sendMedicationReminderEmail({
       </div>
 
       <p style="color: #64748b; font-size: 13px;">Please log into the CareNest Senior Dashboard or Family Dashboard once the dose is administered.</p>
-      <a href="${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/dashboard" class="btn">Confirm Dose Administration</a>
+      <a href="${getAppUrl()}/dashboard" class="btn">Confirm Dose Administration</a>
     `
   );
 
@@ -227,7 +229,7 @@ export async function sendMissedDoseAlertEmail({
       </div>
 
       <p style="color: #334155; font-size: 14px;">Please check in with ${seniorName} or contact their primary caretaker to verify that the dose is taken safely.</p>
-      <a href="${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/dashboard/family" class="btn">View Care Dashboard</a>
+      <a href="${getAppUrl()}/dashboard/family" class="btn">View Care Dashboard</a>
     `
   );
 
@@ -268,7 +270,7 @@ export async function sendCaregiverEscalationEmail({
       </div>
 
       <p style="color: #991b1b; font-weight: 600; font-size: 14px;">Action Required: Please phone the senior or dispatch a caregiver check immediately.</p>
-      <a href="${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/dashboard/family" class="btn" style="background-color: #b91c1c;">Open Emergency Care Circle</a>
+      <a href="${getAppUrl()}/dashboard/family" class="btn" style="background-color: #b91c1c;">Open Emergency Care Circle</a>
     `
   );
 
@@ -314,7 +316,7 @@ export async function sendAppointmentReminderEmail({
         ${notes ? `<div class="info-row"><span class="info-label">Preparation Notes:</span><span class="info-value">${notes}</span></div>` : ''}
       </div>
 
-      <a href="${process.env.NEXTAUTH_URL || 'http://localhost:3000'}/dashboard/family" class="btn">View Appointment Details</a>
+      <a href="${getAppUrl()}/dashboard/family" class="btn">View Appointment Details</a>
     `
   );
 
@@ -360,3 +362,44 @@ export async function sendCareCircleInvitationEmail({
 
   return sendEmail({ to, subject, html, type: "INVITATION" });
 }
+
+/**
+ * Family Administrator Email OTP Verification template
+ */
+export async function sendOtpVerificationEmail({
+  to,
+  name,
+  otp,
+}: {
+  to: string;
+  name: string;
+  otp: string;
+}): Promise<EmailResult> {
+  const subject = `Your CARENEST Verification Code: ${otp}`;
+  const html = generateBaseEmailWrapper(
+    subject,
+    `
+      <span class="badge badge-info">Identity Verification</span>
+      <h2 style="margin-top: 0; font-size: 20px; color: #0f172a;">Verify Your Email Address</h2>
+      <p style="color: #334155;">Hello <strong>${name || "Family Administrator"}</strong>,</p>
+      <p style="color: #334155;">Welcome to CARENEST. Please use the following 6-digit verification code to complete your Family Administrator account registration:</p>
+      
+      <div style="background: #f0fdf4; border: 2px dashed #0f766e; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
+        <span style="font-family: 'Courier New', Courier, monospace; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #0f766e;">
+          ${otp}
+        </span>
+      </div>
+
+      <div class="info-card">
+        <div class="info-row"><span class="info-label">Security Notice:</span><span class="info-value">This code expires in 5 minutes.</span></div>
+        <div class="info-row"><span class="info-label">Intended Recipient:</span><span class="info-value">${to}</span></div>
+        <div class="info-row"><span class="info-label">Action:</span><span class="info-value">Enter this code on the registration page</span></div>
+      </div>
+
+      <p style="color: #64748b; font-size: 13px;">If you did not request this verification code, please ignore this email. No account will be activated without code verification.</p>
+    `
+  );
+
+  return sendEmail({ to, subject, html, type: "OTP_VERIFICATION" });
+}
+

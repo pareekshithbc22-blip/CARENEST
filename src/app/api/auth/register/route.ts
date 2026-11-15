@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { RegisterSchema } from "@/lib/validations";
+import { verifyVerificationToken } from "@/lib/otp";
 
 export async function POST(req: Request) {
   try {
@@ -15,14 +16,39 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email, password, name, role, phoneNumber } = validated.data;
+    const { email, password, name, role, phoneNumber, verificationToken } = validated.data;
+    const normalizedEmail = email.toLowerCase().trim();
+
+    // Enforce email verification for Family Administrator
+    if (role === "FAMILY") {
+      if (!verificationToken) {
+        return NextResponse.json(
+          {
+            error:
+              "Email verification is required before completing Family Administrator registration. Please verify your email via OTP.",
+          },
+          { status: 403 }
+        );
+      }
+
+      const isValidToken = verifyVerificationToken(verificationToken, normalizedEmail);
+      if (!isValidToken) {
+        return NextResponse.json(
+          {
+            error:
+              "Invalid or expired email verification token. Please verify your email address again.",
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     if (role === "CARETAKER" && (!phoneNumber || phoneNumber.trim().length < 7)) {
       return NextResponse.json(
         { error: "A valid phone number is required when registering as a Licensed Caretaker." },
         { status: 400 }
       );
     }
-    const normalizedEmail = email.toLowerCase().trim();
 
     const existingUser = await prisma.user.findUnique({
       where: { email: normalizedEmail },
@@ -36,6 +62,9 @@ export async function POST(req: Request) {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
+    const isEmailVerified =
+      role === "FAMILY" ||
+      (!!verificationToken && verifyVerificationToken(verificationToken, normalizedEmail));
 
     const user = await prisma.$transaction(async (tx) => {
       const newUser = await tx.user.create({
@@ -45,6 +74,8 @@ export async function POST(req: Request) {
           name,
           role,
           phoneNumber,
+          isEmailVerified,
+          emailVerified: isEmailVerified ? new Date() : null,
         },
       });
 
@@ -150,7 +181,7 @@ export async function POST(req: Request) {
           action: "USER_REGISTERED",
           entityType: "User",
           entityId: newUser.id,
-          details: { role, email: normalizedEmail },
+          details: { role, email: normalizedEmail, isEmailVerified },
         },
       });
 
@@ -165,6 +196,7 @@ export async function POST(req: Request) {
           email: user.email,
           name: user.name,
           role: user.role,
+          isEmailVerified: user.isEmailVerified,
         },
       },
       { status: 201 }

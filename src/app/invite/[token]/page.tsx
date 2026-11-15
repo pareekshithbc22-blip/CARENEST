@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { getAppUrl } from "@/lib/config";
 import { Heart, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -89,7 +90,7 @@ export default async function InvitationPage({
               action={async () => {
                 "use server";
                 const res = await fetch(
-                  `${process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/care-circles/invitations/${token}/accept`,
+                  `${getAppUrl()}/api/care-circles/invitations/${token}/accept`,
                   { method: "POST" }
                 );
                 if (res.ok) {

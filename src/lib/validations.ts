@@ -5,7 +5,16 @@ export const RegisterSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters long"),
   name: z.string().min(2, "Name must be at least 2 characters"),
   role: z.enum(["SENIOR", "FAMILY", "CARETAKER", "ADMIN"]).default("FAMILY"),
-  phoneNumber: z.string().optional(),
+  phoneNumber: z
+    .string()
+    .trim()
+    .min(7, "Phone number must be at least 7 digits")
+    .max(20, "Phone number cannot exceed 20 characters")
+    .regex(
+      /^\+?[0-9\s\-()]{7,20}$/,
+      "Invalid phone number format. Only numbers, +, -, () and spaces are permitted"
+    ),
+  verificationToken: z.string().optional(),
 });
 
 export const ProfileCreateSchema = z.object({
