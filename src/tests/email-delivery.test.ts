@@ -89,4 +89,48 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
     expect(result.isSimulated).toBe(true);
     expect(result.messageId).toBeDefined();
   });
+
+  it("recognizes Gmail SMTP configuration and handles authentication errors accurately", async () => {
+    const originalEnv = process.env.NODE_ENV;
+    const originalVitest = process.env.VITEST;
+    const originalHost = process.env.SMTP_HOST;
+    const originalUser = process.env.SMTP_USER;
+    const originalPass = process.env.SMTP_PASS;
+    const originalFrom = process.env.SMTP_FROM;
+
+    try {
+      (process.env as Record<string, string | undefined>)["NODE_ENV"] = "production";
+      delete process.env.VITEST;
+
+      process.env.SMTP_HOST = "smtp.gmail.com";
+      process.env.SMTP_PORT = "465";
+      process.env.SMTP_USER = "mock.caregiver@gmail.com";
+      process.env.SMTP_PASS = "mock app password test";
+      process.env.SMTP_FROM = "CareNest Health <mock.caregiver@gmail.com>";
+
+      const result = await sendEmail({
+        to: "recipient@gmail.com",
+        subject: "SMTP Test",
+        html: "<p>Sample</p>",
+        type: "OTP_VERIFICATION",
+      });
+
+      // Provider was recognized as SMTP (attempted real delivery)
+      expect(result.provider).toBe("SMTP");
+      // Since mock password is fake, it will fail authentication (not unconfigured)
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+    } finally {
+      (process.env as Record<string, string | undefined>)["NODE_ENV"] = originalEnv;
+      if (originalVitest) process.env.VITEST = originalVitest;
+      if (originalHost) process.env.SMTP_HOST = originalHost;
+      else delete process.env.SMTP_HOST;
+      if (originalUser) process.env.SMTP_USER = originalUser;
+      else delete process.env.SMTP_USER;
+      if (originalPass) process.env.SMTP_PASS = originalPass;
+      else delete process.env.SMTP_PASS;
+      if (originalFrom) process.env.SMTP_FROM = originalFrom;
+      else delete process.env.SMTP_FROM;
+    }
+  });
 });

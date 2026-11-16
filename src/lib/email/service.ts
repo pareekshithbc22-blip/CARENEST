@@ -33,27 +33,45 @@ export interface SendEmailOptions {
 }
 
 let cachedTransporter: Transporter | null = null;
+let lastSmtpConfigKey: string | null = null;
 
 function getSmtpTransporter(): Transporter | null {
-  const host = process.env.SMTP_HOST;
+  const host =
+    process.env.SMTP_HOST ||
+    (process.env.SMTP_USER?.includes("@gmail.com") ? "smtp.gmail.com" : undefined);
   const user = process.env.SMTP_USER;
   const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
 
-  if (!host || !user || !pass) {
+  if (
+    !host ||
+    !user ||
+    !pass ||
+    user.trim().length === 0 ||
+    pass.trim().length === 0 ||
+    user.includes("your-email@gmail.com") ||
+    pass.includes("xxxx xxxx")
+  ) {
     return null;
   }
 
-  const port = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 465;
-  const secure = process.env.SMTP_SECURE === "true" || port === 465;
+  const rawPort = process.env.SMTP_PORT;
+  const port = rawPort ? parseInt(rawPort, 10) : 465;
+  const secure =
+    process.env.SMTP_SECURE !== undefined
+      ? process.env.SMTP_SECURE === "true"
+      : port === 465;
+  const cleanPass = pass.replace(/\s+/g, "");
 
-  if (!cachedTransporter) {
+  const configKey = `${host}:${port}:${secure}:${user}:${cleanPass}`;
+  if (!cachedTransporter || lastSmtpConfigKey !== configKey) {
+    lastSmtpConfigKey = configKey;
     cachedTransporter = nodemailer.createTransport({
       host,
       port,
       secure,
       auth: {
         user,
-        pass: pass.replace(/\s+/g, ""), // Strip spaces from Google 16-character App Passwords
+        pass: cleanPass, // Strip spaces from Google 16-character App Passwords
       },
       connectionTimeout: 10000,
       greetingTimeout: 10000,
@@ -83,7 +101,9 @@ export async function sendEmail({
   if (smtpTransporter) {
     const smtpUser = process.env.SMTP_USER!;
     const fromAddress =
-      process.env.EMAIL_FROM || `"CareNest Health" <${smtpUser}>`;
+      process.env.SMTP_FROM ||
+      process.env.EMAIL_FROM ||
+      `"CareNest Health" <${smtpUser}>`;
 
     try {
       const info = await smtpTransporter.sendMail({
