@@ -1,5 +1,24 @@
 import { z } from "zod";
 
+export const CaretakerProfileCreateSchema = z.object({
+  fullName: z.string().min(2, "Full legal name is required"),
+  professionalCategory: z.string().min(2, "Professional category is required"),
+  qualification: z.string().min(2, "Qualification is required"),
+  registrationNumber: z.string().optional().nullable(),
+  issuingAuthority: z.string().min(2, "Issuing authority is required"),
+  state: z.string().optional().nullable(),
+  documentFileName: z.string().min(1, "Document file name is required"),
+  documentFilePath: z.string().min(1, "Document file path is required"),
+  documentMimeType: z.enum(
+    ["application/pdf", "image/jpeg", "image/jpg", "image/png"],
+    { message: "Document must be PDF, JPG, or PNG format" }
+  ),
+  documentFileSize: z
+    .number()
+    .positive("Document file size is required")
+    .max(10 * 1024 * 1024, "Document file size cannot exceed 10MB"),
+});
+
 export const RegisterSchema = z.object({
   email: z.string().email("Valid email address is required"),
   password: z.string().min(8, "Password must be at least 8 characters long"),
@@ -15,6 +34,7 @@ export const RegisterSchema = z.object({
       "Invalid phone number format. Only numbers, +, -, () and spaces are permitted"
     ),
   verificationToken: z.string().optional(),
+  caretakerProfile: CaretakerProfileCreateSchema.optional(),
 });
 
 export const ProfileCreateSchema = z.object({

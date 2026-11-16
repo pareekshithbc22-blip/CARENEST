@@ -94,6 +94,20 @@ enum NotificationType {
   SYSTEM
 }
 
+enum VerificationStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum AccessRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  REVOKED
+}
+
 model User {
   id              String         @id @default(uuid())
   email           String         @unique
@@ -122,6 +136,10 @@ model User {
   notifications     Notification[]
   notificationPref  NotificationPreference?
   auditLogs         AuditLog[]
+  caretakerProfile  CaretakerProfile?      @relation("CaretakerVerificationProfile")
+  reviewedCaretakers CaretakerProfile[]    @relation("ReviewedByAdmin")
+  caretakerAccessRequests PatientAccessRequest[] @relation("CaretakerAccessRequests")
+  familyAdminAccessRequests PatientAccessRequest[] @relation("FamilyAdminAccessRequests")
 
   @@index([email])
 }
@@ -155,6 +173,7 @@ model ElderlyProfile {
   careNotes             CareNote[]
   auditLogs             AuditLog[]
   notifications         Notification[]
+  caretakerAccessRequests PatientAccessRequest[]
 
   @@index([createdById])
 }
@@ -433,3 +452,53 @@ model EmailVerificationOtp {
 
   @@index([email])
 }
+
+model CaretakerProfile {
+  id                   String             @id @default(uuid())
+  userId               String             @unique
+  user                 User               @relation("CaretakerVerificationProfile", fields: [userId], references: [id], onDelete: Cascade)
+  fullName             String             // Full legal name
+  professionalCategory String             // e.g. "Registered Nurse (RN)", "Doctor / Physician Assistant", "Certified Caregiver"
+  qualification        String             // e.g. "B.Sc Nursing", "GNM", "Diploma in Geriatric Care"
+  registrationNumber   String?            // Certificate / license number
+  issuingAuthority     String             // e.g. "State Nursing Council", "Medical Council", "Red Cross"
+  state                String?            // State / Region
+  documentFileName     String             // Original filename
+  documentFilePath     String             // Secure storage path (not publicly served)
+  documentMimeType     String             // application/pdf, image/jpeg, image/png
+  documentFileSize     Int                // Size in bytes
+  status               VerificationStatus @default(PENDING)
+  rejectionReason      String?
+  reviewedById         String?
+  reviewedBy           User?              @relation("ReviewedByAdmin", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt           DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([status])
+  @@index([userId])
+}
+
+model PatientAccessRequest {
+  id               String              @id @default(uuid())
+  elderlyProfileId String
+  elderlyProfile   ElderlyProfile      @relation(fields: [elderlyProfileId], references: [id], onDelete: Cascade)
+  caretakerId      String
+  caretaker        User                @relation("CaretakerAccessRequests", fields: [caretakerId], references: [id], onDelete: Cascade)
+  familyAdminId    String
+  familyAdmin      User                @relation("FamilyAdminAccessRequests", fields: [familyAdminId], references: [id], onDelete: Cascade)
+  status           AccessRequestStatus @default(PENDING)
+  notes            String?             // Message from caretaker
+  rejectionReason  String?             // Reason if rejected
+  requestedAt      DateTime            @default(now())
+  respondedAt      DateTime?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  @@unique([elderlyProfileId, caretakerId])
+  @@index([elderlyProfileId])
+  @@index([caretakerId])
+  @@index([familyAdminId])
+  @@index([status])
+}
+

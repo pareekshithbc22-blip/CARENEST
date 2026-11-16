@@ -17,6 +17,9 @@ import {
   AlertCircle,
   KeyRound,
   CheckCircle2,
+  Upload,
+  FileText,
+  FileCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,12 +28,21 @@ import { Label } from "@/components/ui/label";
 export default function RegisterPage() {
   const router = useRouter();
 
-  // Form State
+  // Account Form State
   const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [role, setRole] = React.useState("FAMILY");
   const [phoneNumber, setPhoneNumber] = React.useState("");
+
+  // Caretaker Professional Credentials State
+  const [legalName, setLegalName] = React.useState("");
+  const [professionalCategory, setProfessionalCategory] = React.useState("Registered Nurse (RN)");
+  const [qualification, setQualification] = React.useState("");
+  const [registrationNumber, setRegistrationNumber] = React.useState("");
+  const [issuingAuthority, setIssuingAuthority] = React.useState("");
+  const [stateRegion, setStateRegion] = React.useState("");
+  const [selectedFile, setSelectedFile] = React.useState<File | null>(null);
 
   // OTP Verification State
   const [step, setStep] = React.useState<"FORM" | "OTP">("FORM");
@@ -42,6 +54,7 @@ export default function RegisterPage() {
 
   // Status & Feedback
   const [loading, setLoading] = React.useState(false);
+  const [loadingStage, setLoadingStage] = React.useState<string | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [successNotice, setSuccessNotice] = React.useState<string | null>(null);
 
@@ -72,13 +85,35 @@ export default function RegisterPage() {
     return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
-  // Step 1: Request OTP or Direct Register
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Client-side file size check: max 10MB
+    if (file.size > 10 * 1024 * 1024) {
+      setError("Document file size exceeds 10 MB limit. Please upload a smaller certificate.");
+      return;
+    }
+
+    // Client-side extension check
+    const allowed = [".pdf", ".jpg", ".jpeg", ".png"];
+    const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+    if (!allowed.includes(ext)) {
+      setError("Invalid file format. Please upload a PDF, JPG, or PNG document.");
+      return;
+    }
+
+    setSelectedFile(file);
+  };
+
+  // Step 1: Validate Details and Dispatch OTP
   const handleInitialSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccessNotice(null);
 
-    // Client-side validations
+    // Common validations
     if (!name.trim() || name.trim().length < 2) {
       setError("Please enter your full name (at least 2 characters).");
       return;
@@ -99,86 +134,62 @@ export default function RegisterPage() {
       return;
     }
 
-    // If Family Administrator: Email OTP verification is mandatory
-    if (role === "FAMILY") {
-      setLoading(true);
-      try {
-        const res = await fetch("/api/auth/otp/send", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: email.trim(), name: name.trim(), role }),
-        });
-
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.error || "Failed to dispatch verification code.");
-        }
-
-        setStep("OTP");
-        setExpirySeconds(300);
-        setCooldownSeconds(data.cooldownSeconds || 60);
-        setSuccessNotice(data.message || `Verification code sent to ${email.trim()}`);
-        setOtp(["", "", "", "", "", ""]);
-        // Focus first OTP input after state update
-        setTimeout(() => otpInputRefs.current[0]?.focus(), 100);
-      } catch (err: any) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
+    // Caretaker specific validations
+    if (role === "CARETAKER") {
+      if (!qualification.trim() || qualification.trim().length < 2) {
+        setError("Please enter your clinical qualification (e.g. B.Sc. Nursing, GNM, MBBS).");
+        return;
       }
-      return;
+
+      if (!issuingAuthority.trim() || issuingAuthority.trim().length < 2) {
+        setError("Please enter the issuing council or professional licensing authority.");
+        return;
+      }
+
+      if (!selectedFile) {
+        setError("Please attach your professional certificate or license document (PDF, JPG, or PNG).");
+        return;
+      }
     }
 
-    // If Caretaker: Direct registration
+    // Both Family Admin and Caretakers undergo email OTP verification
     setLoading(true);
+    setLoadingStage("Dispatching verification code...");
     try {
-      const res = await fetch("/api/auth/register", {
+      const res = await fetch("/api/auth/otp/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          email: email.trim(),
-          password,
-          role,
-          phoneNumber: phoneNumber.trim(),
-        }),
+        body: JSON.stringify({ email: email.trim(), name: name.trim(), role }),
       });
 
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || "Registration failed.");
+        throw new Error(data.error || "Failed to dispatch verification code.");
       }
 
-      // Automatic sign in
-      const signInRes = await signIn("credentials", {
-        email: email.trim(),
-        password,
-        redirect: false,
-      });
-
-      if (!signInRes?.error) {
-        router.push("/dashboard/caretaker");
-        router.refresh();
-      } else {
-        router.push("/login");
-      }
+      setStep("OTP");
+      setExpirySeconds(300);
+      setCooldownSeconds(data.cooldownSeconds || 60);
+      setSuccessNotice(data.message || `Verification code sent to ${email.trim()}`);
+      setOtp(["", "", "", "", "", ""]);
+      setTimeout(() => otpInputRefs.current[0]?.focus(), 100);
     } catch (err: any) {
       setError(err.message);
+    } finally {
       setLoading(false);
+      setLoadingStage(null);
     }
   };
 
   // Step 2: Handle OTP Input Changes
   const handleOtpChange = (index: number, value: string) => {
-    // Only accept numeric digit
     const cleaned = value.replace(/\D/g, "");
     if (!cleaned && value !== "") return;
 
     const newOtp = [...otp];
-    newOtp[index] = cleaned.slice(-1); // Take single digit
+    newOtp[index] = cleaned.slice(-1);
     setOtp(newOtp);
 
-    // Move to next input if digit entered
     if (cleaned && index < 5) {
       otpInputRefs.current[index + 1]?.focus();
     }
@@ -235,7 +246,7 @@ export default function RegisterPage() {
     }
   };
 
-  // Submit OTP Verification and complete Family Administrator registration
+  // Submit OTP Verification and complete registration
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -255,6 +266,7 @@ export default function RegisterPage() {
 
     try {
       // Step A: Verify OTP with API
+      setLoadingStage("Verifying security code...");
       const verifyRes = await fetch("/api/auth/otp/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -274,7 +286,39 @@ export default function RegisterPage() {
         throw new Error("Missing verification credentials. Please try again.");
       }
 
-      // Step B: Submit validated registration with verification token
+      // Step B: If Caretaker, upload certificate document to secure storage
+      let uploadedDocData = null;
+      if (role === "CARETAKER" && selectedFile) {
+        setLoadingStage("Encrypting & storing certificate in vault...");
+        const uploadForm = new FormData();
+        uploadForm.append("file", selectedFile);
+
+        const uploadRes = await fetch("/api/caretakers/upload-document", {
+          method: "POST",
+          body: uploadForm,
+        });
+
+        const uploadJson = await uploadRes.json();
+        if (!uploadRes.ok) {
+          throw new Error(uploadJson.error || "Failed to upload certificate document.");
+        }
+
+        uploadedDocData = {
+          fullName: legalName.trim() || name.trim(),
+          professionalCategory,
+          qualification: qualification.trim(),
+          registrationNumber: registrationNumber.trim() || undefined,
+          issuingAuthority: issuingAuthority.trim(),
+          state: stateRegion.trim() || undefined,
+          documentFileName: uploadJson.documentFileName,
+          documentFilePath: uploadJson.documentFilePath,
+          documentMimeType: uploadJson.documentMimeType,
+          documentFileSize: uploadJson.documentFileSize,
+        };
+      }
+
+      // Step C: Submit completed registration payload
+      setLoadingStage("Creating verified care account...");
       const regRes = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -282,9 +326,10 @@ export default function RegisterPage() {
           name: name.trim(),
           email: email.trim(),
           password,
-          role: "FAMILY",
+          role,
           phoneNumber: phoneNumber.trim(),
           verificationToken,
+          caretakerProfile: uploadedDocData || undefined,
         }),
       });
 
@@ -293,7 +338,8 @@ export default function RegisterPage() {
         throw new Error(regData.error || "Registration completion failed.");
       }
 
-      // Step C: Automatic sign in
+      // Step D: Automatic sign in
+      setLoadingStage("Signing in...");
       const signInRes = await signIn("credentials", {
         email: email.trim(),
         password,
@@ -301,7 +347,11 @@ export default function RegisterPage() {
       });
 
       if (!signInRes?.error) {
-        router.push("/dashboard/family");
+        if (role === "CARETAKER") {
+          router.push("/dashboard/caretaker");
+        } else {
+          router.push("/dashboard/family");
+        }
         router.refresh();
       } else {
         router.push("/login?verified=true");
@@ -309,6 +359,7 @@ export default function RegisterPage() {
     } catch (err: any) {
       setError(err.message);
       setLoading(false);
+      setLoadingStage(null);
     }
   };
 
@@ -333,8 +384,8 @@ export default function RegisterPage() {
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="rounded-2xl border border-slate-200 bg-white p-8 shadow-xl">
+      <div className={`mt-8 sm:mx-auto sm:w-full ${role === "CARETAKER" && step === "FORM" ? "sm:max-w-xl" : "sm:max-w-md"}`}>
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8 shadow-xl">
           {error && (
             <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-semibold text-rose-800 flex items-start gap-2">
               <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
@@ -353,17 +404,51 @@ export default function RegisterPage() {
             /* STEP 1: Registration Form */
             <form onSubmit={handleInitialSubmit} className="space-y-4">
               <div className="space-y-1">
-                <Label htmlFor="name">Full Name *</Label>
-                <div className="relative">
-                  <User className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                  <Input
-                    id="name"
-                    required
-                    placeholder="Sarah Vance"
-                    className="pl-9"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
+                <Label htmlFor="role">Select Account Type *</Label>
+                <select
+                  id="role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value)}
+                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold focus:border-teal-600 focus:outline-none"
+                >
+                  <option value="FAMILY">Family Guardian / Administrator</option>
+                  <option value="CARETAKER">Licensed Nurse / Caretaker (Professional Verification)</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="name">Full Name *</Label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                    <Input
+                      id="name"
+                      required
+                      placeholder="Sarah Vance"
+                      className="pl-9"
+                      value={name}
+                      onChange={(e) => {
+                        setName(e.target.value);
+                        if (!legalName) setLegalName(e.target.value);
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="phone">Phone Number *</Label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                    <Input
+                      id="phone"
+                      required
+                      type="tel"
+                      placeholder="+1 (555) 234-5678"
+                      className="pl-9 text-xs"
+                      value={phoneNumber}
+                      onChange={(e) => setPhoneNumber(e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -375,35 +460,14 @@ export default function RegisterPage() {
                     id="email"
                     type="email"
                     required
-                    placeholder="sarah.vance@carenest.org"
+                    placeholder="name@carenest.org"
                     className="pl-9"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                   />
                 </div>
-                {role === "FAMILY" && (
-                  <p className="text-[11px] text-teal-700 font-medium flex items-center gap-1 mt-1">
-                    <ShieldCheck className="h-3 w-3" /> A 6-digit OTP code will be sent to verify this address.
-                  </p>
-                )}
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor="phone">Phone Number *</Label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                  <Input
-                    id="phone"
-                    required
-                    type="tel"
-                    placeholder="+1 (555) 234-5678"
-                    className="pl-9 text-xs"
-                    value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
-                  />
-                </div>
-                <p className="text-[11px] text-slate-500">
-                  Required for emergency escalation and care circle notifications.
+                <p className="text-[11px] text-teal-700 font-medium flex items-center gap-1 mt-1">
+                  <ShieldCheck className="h-3 w-3" /> A 6-digit verification code will be sent to confirm this address.
                 </p>
               </div>
 
@@ -424,22 +488,136 @@ export default function RegisterPage() {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <Label htmlFor="role">Account Role *</Label>
-                <select
-                  id="role"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold focus:border-teal-600 focus:outline-none"
-                >
-                  <option value="FAMILY">Family Guardian / Administrator (Email Verified)</option>
-                  <option value="CARETAKER">Licensed Nurse / Caretaker</option>
-                </select>
-              </div>
+              {/* CARETAKER PROFESSIONAL QUALIFICATIONS SECTION */}
+              {role === "CARETAKER" && (
+                <div className="mt-4 rounded-xl border border-teal-200 bg-teal-50/40 p-4 space-y-3">
+                  <div className="flex items-center gap-2 border-b border-teal-200 pb-2">
+                    <FileCheck className="h-5 w-5 text-teal-700" />
+                    <div>
+                      <h3 className="text-xs font-bold text-teal-950">Professional Clinical Credentials</h3>
+                      <p className="text-[11px] text-teal-800">
+                        Submitted for manual review by CARENEST platform administrators.
+                      </p>
+                    </div>
+                  </div>
 
-              <div className="rounded-xl bg-teal-50/70 border border-teal-200 p-3 text-[11px] text-teal-900 leading-relaxed">
-                <strong>Notice for Senior Patients:</strong> Senior accounts are registered and configured directly by their authorized Family Guardian with an accessible 4-digit PIN for one-step login.
-              </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="category" className="text-xs">Professional Category *</Label>
+                      <select
+                        id="category"
+                        value={professionalCategory}
+                        onChange={(e) => setProfessionalCategory(e.target.value)}
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold focus:border-teal-600 focus:outline-none"
+                      >
+                        <option value="Registered Nurse (RN)">Registered Nurse (RN)</option>
+                        <option value="Doctor / Physician Assistant">Doctor / Physician Assistant</option>
+                        <option value="Certified Nursing Assistant (CNA)">Certified Nursing Assistant (CNA)</option>
+                        <option value="Geriatric Care Specialist">Geriatric Care Specialist</option>
+                        <option value="Other Healthcare Professional">Other Healthcare Professional</option>
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor="qualification" className="text-xs">Highest Qualification *</Label>
+                      <Input
+                        id="qualification"
+                        required
+                        placeholder="e.g. B.Sc. Nursing, GNM, MBBS"
+                        className="text-xs"
+                        value={qualification}
+                        onChange={(e) => setQualification(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="regNumber" className="text-xs">Registration / Certificate Number</Label>
+                      <Input
+                        id="regNumber"
+                        placeholder="e.g. RN-894721-CA (if applicable)"
+                        className="text-xs"
+                        value={registrationNumber}
+                        onChange={(e) => setRegistrationNumber(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label htmlFor="authority" className="text-xs">Issuing Authority *</Label>
+                      <Input
+                        id="authority"
+                        required
+                        placeholder="e.g. State Nursing Council, Red Cross"
+                        className="text-xs"
+                        value={issuingAuthority}
+                        onChange={(e) => setIssuingAuthority(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label htmlFor="stateRegion" className="text-xs">State / Province</Label>
+                    <Input
+                      id="stateRegion"
+                      placeholder="e.g. California, Delhi, Maharashtra"
+                      className="text-xs"
+                      value={stateRegion}
+                      onChange={(e) => setStateRegion(e.target.value)}
+                    />
+                  </div>
+
+                  {/* Certificate Upload Field */}
+                  <div className="space-y-1 pt-1">
+                    <Label htmlFor="certUpload" className="text-xs font-bold text-slate-800">
+                      Upload Certificate or License Document *
+                    </Label>
+                    <div className="mt-1 flex justify-center px-4 pt-3 pb-3 border-2 border-dashed border-teal-300 rounded-xl hover:bg-teal-50 transition-colors bg-white">
+                      <div className="space-y-1 text-center">
+                        <Upload className="mx-auto h-7 w-7 text-teal-600" />
+                        <div className="flex text-xs text-slate-600">
+                          <label
+                            htmlFor="certUpload"
+                            className="relative cursor-pointer rounded-md font-bold text-teal-700 hover:text-teal-800 focus-within:outline-none"
+                          >
+                            <span>Choose Certificate File</span>
+                            <input
+                              id="certUpload"
+                              name="certUpload"
+                              type="file"
+                              accept=".pdf,.jpg,.jpeg,.png"
+                              className="sr-only"
+                              onChange={handleFileChange}
+                            />
+                          </label>
+                        </div>
+                        <p className="text-[10px] text-slate-500">
+                          PDF, JPG, or PNG up to 10 MB. Stored securely in CARENEST vault.
+                        </p>
+                      </div>
+                    </div>
+
+                    {selectedFile && (
+                      <div className="mt-2 flex items-center justify-between p-2 rounded-lg bg-teal-100/70 border border-teal-300 text-xs">
+                        <div className="flex items-center gap-2 text-teal-900 font-semibold truncate">
+                          <FileText className="h-4 w-4 text-teal-700 shrink-0" />
+                          <span className="truncate">{selectedFile.name}</span>
+                          <span className="text-[10px] text-slate-600">
+                            ({Math.round(selectedFile.size / 1024)} KB)
+                          </span>
+                        </div>
+                        <CheckCircle2 className="h-4 w-4 text-teal-700 shrink-0" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {role === "FAMILY" && (
+                <div className="rounded-xl bg-teal-50/70 border border-teal-200 p-3 text-[11px] text-teal-900 leading-relaxed">
+                  <strong>Notice for Senior Patients:</strong> Senior accounts are registered and configured directly by their authorized Family Guardian with an accessible 4-digit PIN for one-step login.
+                </div>
+              )}
 
               <Button
                 type="submit"
@@ -447,14 +625,12 @@ export default function RegisterPage() {
                 className="w-full h-11 bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm shadow-md mt-2 flex items-center justify-center gap-2"
               >
                 {loading ? (
-                  "Processing..."
-                ) : role === "FAMILY" ? (
+                  loadingStage || "Processing..."
+                ) : (
                   <>
                     <ShieldCheck className="h-4 w-4" />
-                    Verify Email & Register
+                    Verify Email & Continue
                   </>
-                ) : (
-                  "Create Account & Start Circle"
                 )}
               </Button>
             </form>
@@ -528,7 +704,7 @@ export default function RegisterPage() {
                   disabled={loading || otp.join("").length !== 6 || expirySeconds <= 0}
                   className="w-full h-11 bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm shadow-md"
                 >
-                  {loading ? "Verifying & Creating Account..." : "Confirm Code & Complete Registration"}
+                  {loading ? loadingStage || "Completing registration..." : "Confirm Code & Complete Registration"}
                 </Button>
 
                 <button

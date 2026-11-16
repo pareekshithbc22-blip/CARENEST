@@ -158,6 +158,29 @@ export function Navbar({
                   Circle Records
                 </Link>
               </>
+            ) : userRole === "ADMIN" ? (
+              <>
+                <Link
+                  href="/dashboard/admin/verifications"
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    pathname.startsWith("/dashboard/admin")
+                      ? "bg-teal-50 text-teal-800 font-semibold dark:bg-teal-950 dark:text-teal-200"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-50 dark:text-slate-400"
+                  }`}
+                >
+                  License Verifications
+                </Link>
+                <Link
+                  href="/dashboard/family"
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                    pathname === "/dashboard/family"
+                      ? "bg-teal-50 text-teal-800 font-semibold dark:bg-teal-950 dark:text-teal-200"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-50 dark:text-slate-400"
+                  }`}
+                >
+                  Family Overview
+                </Link>
+              </>
             ) : (
               <>
                 <Link

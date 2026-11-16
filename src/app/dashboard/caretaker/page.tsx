@@ -15,64 +15,61 @@ export const metadata = {
 export default async function CaretakerDashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ patientId?: string; profileId?: string }>;
+  searchParams: Promise<{ patientId?: string; profileId?: string; tab?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) {
     redirect("/login?callbackUrl=/dashboard/caretaker");
   }
 
-  // Accessible profiles
-  const profiles = await getAuthorizedProfiles(user.id);
-  if (profiles.length === 0) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col">
-        <Navbar />
-        <main className="flex-1 flex items-center justify-center p-6 text-center">
-          <div className="max-w-lg bg-white p-8 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-            <h2 className="text-xl font-bold text-slate-900">Awaiting Patient Care Assignment</h2>
-            <p className="text-sm text-slate-600">
-              Welcome, {user.name}. You are registered as a Licensed Caretaker / Nurse. You will see assigned patient schedules, clinical tasks, vital sign logs, and handover notes here once a family coordinator assigns you to their Care Circle.
-            </p>
-          </div>
-        </main>
-      </div>
-    );
-  }
+  // Fetch caretaker professional verification profile
+  const caretakerProfile = await prisma.caretakerProfile.findUnique({
+    where: { userId: user.id },
+  });
 
-  const { patientId, profileId } = await searchParams;
+  // Accessible profiles (enforces verification status === "APPROVED" in permissions.ts)
+  const profiles = await getAuthorizedProfiles(user.id);
+
+  const { patientId, profileId, tab } = await searchParams;
   const initialPatientId =
     (patientId && profiles.some((p) => p.id === patientId) ? patientId : null) ||
     (profileId && profiles.some((p) => p.id === profileId) ? profileId : null) ||
-    profiles[0]?.id;
+    profiles[0]?.id ||
+    "";
 
-  // Assigned tasks
-  const tasks = await prisma.careTask.findMany({
-    where: {
-      OR: [
-        { assignedToId: user.id },
-        { elderlyProfileId: { in: profiles.map((p) => p.id) } },
-      ],
-    },
-    include: {
-      assignedTo: { select: { id: true, name: true, role: true } },
-      completedBy: { select: { id: true, name: true } },
-    },
-    orderBy: { dueDate: "asc" },
-  });
+  // Assigned tasks for accessible patients
+  const tasks =
+    profiles.length > 0
+      ? await prisma.careTask.findMany({
+          where: {
+            OR: [
+              { assignedToId: user.id },
+              { elderlyProfileId: { in: profiles.map((p) => p.id) } },
+            ],
+          },
+          include: {
+            assignedTo: { select: { id: true, name: true, role: true } },
+            completedBy: { select: { id: true, name: true } },
+          },
+          orderBy: { dueDate: "asc" },
+        })
+      : [];
 
-  // Recent care notes
-  const notes = await prisma.careNote.findMany({
-    where: {
-      elderlyProfileId: { in: profiles.map((p) => p.id) },
-    },
-    include: {
-      author: { select: { id: true, name: true, role: true } },
-      shiftHandoverTo: { select: { id: true, name: true } },
-    },
-    orderBy: [{ isPinned: "desc" }, { createdAt: "desc" }],
-    take: 15,
-  });
+  // Recent care notes for accessible patients
+  const notes =
+    profiles.length > 0
+      ? await prisma.careNote.findMany({
+          where: {
+            elderlyProfileId: { in: profiles.map((p) => p.id) },
+          },
+          include: {
+            author: { select: { id: true, name: true, role: true } },
+            shiftHandoverTo: { select: { id: true, name: true } },
+          },
+          orderBy: [{ isPinned: "desc" }, { createdAt: "desc" }],
+          take: 15,
+        })
+      : [];
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -86,9 +83,24 @@ export default async function CaretakerDashboardPage({
       <main className="flex-1">
         <CaretakerDashboardClient
           caretakerName={user.name || "Care Staff"}
+          caretakerProfile={
+            caretakerProfile
+              ? {
+                  id: caretakerProfile.id,
+                  status: caretakerProfile.status,
+                  rejectionReason: caretakerProfile.rejectionReason,
+                  professionalCategory: caretakerProfile.professionalCategory,
+                  qualification: caretakerProfile.qualification,
+                  registrationNumber: caretakerProfile.registrationNumber,
+                  issuingAuthority: caretakerProfile.issuingAuthority,
+                  state: caretakerProfile.state,
+                }
+              : null
+          }
           initialSelectedPatientId={initialPatientId}
           initialTasks={tasks}
           initialNotes={notes}
+          initialSection={tab === "discover" ? "discover" : "patients"}
           profiles={profiles.map((p) => ({
             id: p.id,
             name: p.name,

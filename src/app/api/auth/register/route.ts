@@ -16,16 +16,15 @@ export async function POST(req: Request) {
       );
     }
 
-    const { email, password, name, role, phoneNumber, verificationToken } = validated.data;
+    const { email, password, name, role, phoneNumber, verificationToken, caretakerProfile } = validated.data;
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Enforce email verification for Family Administrator
-    if (role === "FAMILY") {
+    // Enforce email verification for Family Administrator and Caretaker
+    if (role === "FAMILY" || role === "CARETAKER") {
       if (!verificationToken) {
         return NextResponse.json(
           {
-            error:
-              "Email verification is required before completing Family Administrator registration. Please verify your email via OTP.",
+            error: `Email verification is required before completing ${role === "FAMILY" ? "Family Administrator" : "Caretaker"} registration. Please verify your email via OTP.`,
           },
           { status: 403 }
         );
@@ -43,11 +42,13 @@ export async function POST(req: Request) {
       }
     }
 
-    if (role === "CARETAKER" && (!phoneNumber || phoneNumber.trim().length < 7)) {
-      return NextResponse.json(
-        { error: "A valid phone number is required when registering as a Licensed Caretaker." },
-        { status: 400 }
-      );
+    if (role === "CARETAKER") {
+      if (!caretakerProfile) {
+        return NextResponse.json(
+          { error: "Professional qualification details and certificate upload are required for Caretaker registration." },
+          { status: 400 }
+        );
+      }
     }
 
     const existingUser = await prisma.user.findUnique({
@@ -150,28 +151,24 @@ export async function POST(req: Request) {
             status: "SCHEDULED",
           },
         });
-      } else if (role === "CARETAKER") {
-        // Link new Caretaker to the active primary care circle so they have immediate patient assignment
-        const primaryCircle = await tx.careCircle.findFirst({
-          orderBy: { createdAt: "asc" },
+      } else if (role === "CARETAKER" && caretakerProfile) {
+        // Create professional verification application for administrator review
+        await tx.caretakerProfile.create({
+          data: {
+            userId: newUser.id,
+            fullName: caretakerProfile.fullName.trim(),
+            professionalCategory: caretakerProfile.professionalCategory.trim(),
+            qualification: caretakerProfile.qualification.trim(),
+            registrationNumber: caretakerProfile.registrationNumber?.trim() || null,
+            issuingAuthority: caretakerProfile.issuingAuthority.trim(),
+            state: caretakerProfile.state?.trim() || null,
+            documentFileName: caretakerProfile.documentFileName,
+            documentFilePath: caretakerProfile.documentFilePath,
+            documentMimeType: caretakerProfile.documentMimeType,
+            documentFileSize: caretakerProfile.documentFileSize,
+            status: "PENDING",
+          },
         });
-
-        if (primaryCircle) {
-          await tx.careCircleMember.create({
-            data: {
-              careCircleId: primaryCircle.id,
-              userId: newUser.id,
-              role: "CARETAKER",
-              permissions: [
-                "CAN_CONFIRM_DOSE",
-                "CAN_VIEW_RECORDS",
-                "CAN_LOG_CARE_NOTES",
-                "CAN_COMPLETE_TASKS",
-                "CAN_RECEIVE_ESCALATIONS",
-              ],
-            },
-          });
-        }
       }
 
       // Audit Log

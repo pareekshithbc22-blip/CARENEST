@@ -10,7 +10,7 @@ const adapter = new PrismaPg({
 
 const prisma = new PrismaClient({ adapter });
 
-async function main() {
+export async function main() {
   console.log("🌱 Starting CareNest database seeding...");
 
   // Clean existing tables in proper dependency order
@@ -24,6 +24,8 @@ async function main() {
   await prisma.medicationStock.deleteMany();
   await prisma.medicationSchedule.deleteMany();
   await prisma.medication.deleteMany();
+  await prisma.patientAccessRequest.deleteMany();
+  await prisma.caretakerProfile.deleteMany();
   await prisma.careCircleInvitation.deleteMany();
   await prisma.careCircleMember.deleteMany();
   await prisma.careCircle.deleteMany();
@@ -85,6 +87,20 @@ async function main() {
       role: "FAMILY",
       phoneNumber: "+1 (555) 567-8901",
       avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
+      isEmailVerified: true,
+      emailVerified: nowVerified,
+    },
+  });
+
+  // Platform Chief Medical & Compliance Administrator
+  const admin = await prisma.user.create({
+    data: {
+      email: "admin@carenest.org",
+      name: "Dr. Evelyn Harper",
+      passwordHash,
+      role: "ADMIN",
+      phoneNumber: "+1 (555) 999-0000",
+      avatarUrl: "https://images.unsplash.com/photo-1559839734-2b71ea197ec2?w=150&auto=format&fit=crop&q=80",
       isEmailVerified: true,
       emailVerified: nowVerified,
     },
@@ -203,7 +219,7 @@ async function main() {
 
   // Notification Preferences for All Users
   const allUsers = [
-    sarah, eleanor, marcus, david,
+    sarah, eleanor, marcus, david, admin,
     amit, priya, rahul, anjali,
     rameshUser, sureshUser, lakshmiUser, meeraUser,
   ];
@@ -1234,14 +1250,111 @@ async function main() {
     ],
   });
 
+  // ========================================================
+  // 12. CARETAKER VERIFICATION PROFILES & PATIENT ACCESS REQUESTS
+  // ========================================================
+  await prisma.caretakerProfile.create({
+    data: {
+      userId: marcus.id,
+      fullName: "Marcus Reed",
+      professionalCategory: "Registered Nurse (RN)",
+      qualification: "B.Sc. Nursing, Post-Grad Diploma in Geriatric Care",
+      registrationNumber: "RN-894721-CA",
+      issuingAuthority: "California Board of Registered Nursing",
+      state: "California",
+      documentFileName: "marcus_reed_nursing_license.pdf",
+      documentFilePath: "storage/secure_documents/sample_nursing_license.pdf",
+      documentMimeType: "application/pdf",
+      documentFileSize: 245800,
+      status: "APPROVED",
+      reviewedById: admin.id,
+      reviewedAt: nowVerified,
+    },
+  });
+
+  await prisma.caretakerProfile.create({
+    data: {
+      userId: rahul.id,
+      fullName: "Rahul Verma",
+      professionalCategory: "Registered Nurse (RN)",
+      qualification: "B.Sc. Nursing",
+      registrationNumber: "RN-552190-DL",
+      issuingAuthority: "Delhi Nursing Council",
+      state: "Delhi",
+      documentFileName: "rahul_verma_rn_credential.pdf",
+      documentFilePath: "storage/secure_documents/sample_nursing_license.pdf",
+      documentMimeType: "application/pdf",
+      documentFileSize: 198400,
+      status: "APPROVED",
+      reviewedById: admin.id,
+      reviewedAt: nowVerified,
+    },
+  });
+
+  await prisma.caretakerProfile.create({
+    data: {
+      userId: anjali.id,
+      fullName: "Anjali Rao",
+      professionalCategory: "Certified Caregiver",
+      qualification: "Advanced Certificate in Geriatric Patient Support",
+      registrationNumber: "CG-410928-MH",
+      issuingAuthority: "National Healthcare Caregiver Guild",
+      state: "Maharashtra",
+      documentFileName: "anjali_rao_caregiver_cert.pdf",
+      documentFilePath: "storage/secure_documents/sample_caregiver_cert.pdf",
+      documentMimeType: "application/pdf",
+      documentFileSize: 182300,
+      status: "PENDING", // Ready for Administrator review demonstration
+    },
+  });
+
+  // Patient Access Requests
+  await prisma.patientAccessRequest.createMany({
+    data: [
+      {
+        elderlyProfileId: profileEleanor.id,
+        caretakerId: marcus.id,
+        familyAdminId: sarah.id,
+        status: "APPROVED",
+        notes: "Assigned primary nurse for morning vitals and medication supervision.",
+        respondedAt: nowVerified,
+      },
+      {
+        elderlyProfileId: profileRamesh.id,
+        caretakerId: rahul.id,
+        familyAdminId: amit.id,
+        status: "APPROVED",
+        notes: "Experienced geriatric nurse for daily BP and Lisinopril administration.",
+        respondedAt: nowVerified,
+      },
+      {
+        elderlyProfileId: profileSuresh.id,
+        caretakerId: rahul.id,
+        familyAdminId: amit.id,
+        status: "APPROVED",
+        notes: "Post-stroke mobility support and Metformin schedule monitoring.",
+        respondedAt: nowVerified,
+      },
+      {
+        elderlyProfileId: profileLakshmi.id,
+        caretakerId: anjali.id,
+        familyAdminId: priya.id,
+        status: "PENDING",
+        notes: "Certified caregiver offering morning medication check and vital logging.",
+      },
+    ],
+  });
+
   console.log("✅ CareNest database seeded successfully with all demo accounts and multi-patient profiles!");
 }
 
-main()
-  .catch((e) => {
-    console.error("❌ Seed error:", e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+if (process.env.VITEST !== "true") {
+  main()
+    .catch((e) => {
+      console.error("❌ Seed error:", e);
+      process.exit(1);
+    })
+    .finally(async () => {
+      await prisma.$disconnect();
+    });
+}

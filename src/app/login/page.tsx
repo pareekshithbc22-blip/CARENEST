@@ -58,6 +58,8 @@ export default function LoginPage() {
           router.push("/dashboard/senior");
         } else if (role === "CARETAKER") {
           router.push("/dashboard/caretaker");
+        } else if (role === "ADMIN") {
+          router.push("/dashboard/admin/verifications");
         } else {
           router.push("/dashboard/family");
         }

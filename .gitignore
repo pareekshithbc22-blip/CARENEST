@@ -48,5 +48,13 @@ next-env.d.ts
 
 # Python virtual environment
 .venv/
+
+# Secure Private Document Vault
+storage/secure_documents/*
+!storage/secure_documents/.gitkeep
+
+# Secure Private Document Storage
+/storage/secure_documents/*
+!/storage/secure_documents/.gitkeep
 venv/
 /scratch/

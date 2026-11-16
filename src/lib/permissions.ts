@@ -16,6 +16,23 @@ export type CareNestPermission =
  * Enforces multi-profile access control and IDOR prevention.
  */
 export async function getAuthorizedProfiles(userId: string) {
+  // Check if caretaker is approved before exposing any patient profiles
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, role: true },
+  });
+
+  if (user?.role === "CARETAKER") {
+    const caretakerProfile = await prisma.caretakerProfile.findUnique({
+      where: { userId },
+      select: { status: true },
+    });
+    // Unapproved caretakers have zero access to patient medical records
+    if (!caretakerProfile || caretakerProfile.status !== "APPROVED") {
+      return [];
+    }
+  }
+
   // Profiles created directly by the user
   const createdProfiles = await prisma.elderlyProfile.findMany({
     where: { createdById: userId },
@@ -133,31 +150,6 @@ export async function getAuthorizedProfiles(userId: string) {
       });
 
       profileMap.set(newProfile.id, newProfile);
-    } else if (user?.role === "CARETAKER") {
-      // If a Caretaker has no active assignment yet, auto-assign to the primary care circle
-      const primaryCircle = await prisma.careCircle.findFirst({
-        include: { elderlyProfile: true },
-        orderBy: { createdAt: "asc" },
-      });
-
-      if (primaryCircle?.elderlyProfile) {
-        await prisma.careCircleMember.create({
-          data: {
-            careCircleId: primaryCircle.id,
-            userId: user.id,
-            role: "CARETAKER",
-            permissions: [
-              "CAN_MANAGE_MEDS",
-              "CAN_CONFIRM_DOSE",
-              "CAN_VIEW_RECORDS",
-              "CAN_LOG_CARE_NOTES",
-              "CAN_COMPLETE_TASKS",
-              "CAN_RECEIVE_ESCALATIONS",
-            ],
-          },
-        });
-        profileMap.set(primaryCircle.elderlyProfile.id, primaryCircle.elderlyProfile);
-      }
     }
   }
 
@@ -195,6 +187,23 @@ export async function verifyProfileAccess(
     where: { id: userId },
     select: { id: true, role: true },
   });
+
+  // Security gate: Caretakers must have an APPROVED qualification profile to access patient medical data
+  if (user?.role === "CARETAKER") {
+    const caretakerProfile = await prisma.caretakerProfile.findUnique({
+      where: { userId },
+      select: { status: true },
+    });
+
+    if (!caretakerProfile || caretakerProfile.status !== "APPROVED") {
+      return {
+        authorized: false,
+        reason: "CARETAKER_VERIFICATION_REQUIRED",
+        profile: null,
+        memberRecord: null,
+      };
+    }
+  }
 
   // Strict restriction: Medication management (adding, editing, deleting) is exclusively reserved for Caretakers.
   // Family Administrators and Seniors have read-only access to medications, schedules, and adherence.

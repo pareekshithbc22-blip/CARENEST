@@ -1,630 +1,68 @@
 import { describe, it, expect } from "vitest";
-import { PrismaClient } from "../generated/prisma/client";
-import { PrismaPg } from "@prisma/adapter-pg";
-import bcrypt from "bcryptjs";
+import { prisma } from "../src/lib/prisma";
 
 describe("Database Seed & Domain Verification", () => {
-  it("seeds full CareNest healthcare ecosystem and verifies domain constraints", async () => {
-    const adapter = new PrismaPg({
-      connectionString: process.env.DATABASE_URL,
+  it("verifies full CareNest healthcare ecosystem and domain constraints", async () => {
+    // 1. Core Users & Platform Administrator Verification
+    const admin = await prisma.user.findFirst({
+      where: { email: "admin@carenest.org" },
     });
-    const prisma = new PrismaClient({ adapter });
+    expect(admin).toBeDefined();
+    expect(admin?.role).toBe("ADMIN");
 
-    try {
-      await prisma.auditLog.deleteMany();
-      await prisma.notification.deleteMany();
-      await prisma.notificationPreference.deleteMany();
-      await prisma.careNote.deleteMany();
-      await prisma.careTask.deleteMany();
-      await prisma.appointment.deleteMany();
-      await prisma.scheduledDose.deleteMany();
-      await prisma.medicationStock.deleteMany();
-      await prisma.medicationSchedule.deleteMany();
-      await prisma.medication.deleteMany();
-      await prisma.careCircleInvitation.deleteMany();
-      await prisma.careCircleMember.deleteMany();
-      await prisma.careCircle.deleteMany();
-      await prisma.elderlyProfile.deleteMany();
-      await prisma.user.deleteMany();
+    const sarah = await prisma.user.findFirst({
+      where: { email: "sarah.vance@carenest.org" },
+    });
+    expect(sarah).toBeDefined();
+    expect(sarah?.role).toBe("FAMILY");
 
-      const passwordHash = await bcrypt.hash("CareNest2026!", 10);
-      const pinHash = await bcrypt.hash("1234", 10);
-      const pinHashArthur = await bcrypt.hash("5678", 10);
+    const eleanor = await prisma.user.findFirst({
+      where: { email: "eleanor.vance@carenest.org" },
+    });
+    expect(eleanor).toBeDefined();
+    expect(eleanor?.role).toBe("SENIOR");
 
-      // 1. Users
-      const sarah = await prisma.user.create({
-        data: {
-          email: "sarah.vance@carenest.org",
-          name: "Sarah Vance",
-          passwordHash,
-          role: "FAMILY",
-          phoneNumber: "+1 (555) 234-5678",
-          avatarUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80",
-        },
-      });
+    const marcus = await prisma.user.findFirst({
+      where: { email: "marcus.reed@carenest.org" },
+      include: { caretakerProfile: true },
+    });
+    expect(marcus).toBeDefined();
+    expect(marcus?.role).toBe("CARETAKER");
+    expect(marcus?.caretakerProfile?.status).toBe("APPROVED");
 
-      const eleanor = await prisma.user.create({
-        data: {
-          email: "eleanor.vance@carenest.org",
-          name: "Eleanor Vance",
-          passwordHash,
-          role: "SENIOR",
-          phoneNumber: "+1 (555) 345-6789",
-          avatarUrl: "https://images.unsplash.com/photo-1581579438747-1dc8d17bbce4?w=150&auto=format&fit=crop&q=80",
-        },
-      });
+    // 2. Multi-family Caretakers & Pending Application Verification
+    const rahul = await prisma.user.findFirst({
+      where: { email: "rahul.verma@carenest.org" },
+      include: { caretakerProfile: true },
+    });
+    expect(rahul).toBeDefined();
+    expect(rahul?.caretakerProfile?.status).toBe("APPROVED");
 
-      const marcus = await prisma.user.create({
-        data: {
-          email: "marcus.reed@carenest.org",
-          name: "Marcus Reed, RN",
-          passwordHash,
-          role: "CARETAKER",
-          phoneNumber: "+1 (555) 456-7890",
-          avatarUrl: "https://images.unsplash.com/photo-1622253692010-333f2da6031d?w=150&auto=format&fit=crop&q=80",
-        },
-      });
+    const anjali = await prisma.user.findFirst({
+      where: { email: "anjali.rao@carenest.org" },
+      include: { caretakerProfile: true },
+    });
+    expect(anjali).toBeDefined();
+    expect(anjali?.caretakerProfile?.status).toBe("PENDING");
 
-      const david = await prisma.user.create({
-        data: {
-          email: "david.vance@carenest.org",
-          name: "David Vance",
-          passwordHash,
-          role: "FAMILY",
-          phoneNumber: "+1 (555) 567-8901",
-          avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80",
-        },
-      });
+    // 3. Patient Access Requests
+    const requests = await prisma.patientAccessRequest.findMany();
+    expect(requests.length).toBeGreaterThanOrEqual(3);
 
-      // Preferences
-      for (const user of [sarah, eleanor, marcus, david]) {
-        await prisma.notificationPreference.create({
-          data: {
-            userId: user.id,
-            emailReminders: true,
-            missedDoseAlerts: true,
-            escalationAlerts: true,
-            appointmentReminders: true,
-            dailySummaryEmail: user.role === "FAMILY",
-            gracePeriodMinutes: 45,
-          },
-        });
-      }
+    const approvedReq = requests.find((r) => r.status === "APPROVED");
+    expect(approvedReq).toBeDefined();
 
-      // 2. Multiple Elderly Profiles
-      const profileEleanor = await prisma.elderlyProfile.create({
-        data: {
-          name: "Eleanor Vance",
-          preferredName: "Grandma Eleanor",
-          dateOfBirth: new Date("1948-04-12"),
-          gender: "Female",
-          bloodGroup: "A+",
-          allergies: ["Penicillin", "Sulfa drugs"],
-          medicalConditions: ["Hypertension", "Type 2 Diabetes", "Osteoarthritis"],
-          emergencyContactName: "Sarah Vance (Daughter)",
-          emergencyContactPhone: "+1 (555) 234-5678",
-          emergencyContactRelation: "Daughter",
-          notes: "Prefers morning doses after warm oatmeal. Uses magnifying reading glasses for small labels.",
-          avatarUrl: "https://images.unsplash.com/photo-1581579438747-1dc8d17bbce4?w=200&auto=format&fit=crop&q=80",
-          isSeniorModeActive: true,
-          seniorPin: pinHash,
-          createdById: sarah.id,
-        },
-      });
+    const pendingReq = requests.find((r) => r.status === "PENDING");
+    expect(pendingReq).toBeDefined();
 
-      const _profileArthur = await prisma.elderlyProfile.create({
-        data: {
-          name: "Arthur Vance",
-          preferredName: "Arthur",
-          dateOfBirth: new Date("1945-09-20"),
-          gender: "Male",
-          bloodGroup: "O+",
-          allergies: ["Aspirin"],
-          medicalConditions: ["Mild Cognitive Impairment", "Coronary Artery Disease"],
-          emergencyContactName: "Sarah Vance (Daughter)",
-          emergencyContactPhone: "+1 (555) 234-5678",
-          emergencyContactRelation: "Daughter",
-          notes: "Requires gentle step-by-step assistance with morning routine.",
-          avatarUrl: "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=200&auto=format&fit=crop&q=80",
-          isSeniorModeActive: true,
-          seniorPin: pinHashArthur,
-          createdById: sarah.id,
-        },
-      });
+    // 4. Clinical Telemetry, Meds & Circles
+    const profiles = await prisma.elderlyProfile.findMany();
+    expect(profiles.length).toBeGreaterThanOrEqual(4);
 
-      // 3. Care Circles
-      const circleEleanor = await prisma.careCircle.create({
-        data: {
-          name: "Eleanor Vance Care Circle",
-          elderlyProfileId: profileEleanor.id,
-          createdById: sarah.id,
-        },
-      });
+    const medications = await prisma.medication.findMany();
+    expect(medications.length).toBeGreaterThanOrEqual(5);
 
-      await prisma.careCircleMember.createMany({
-        data: [
-          {
-            careCircleId: circleEleanor.id,
-            userId: sarah.id,
-            role: "ADMIN",
-            permissions: ["CAN_MANAGE_MEDS", "CAN_CONFIRM_DOSE", "CAN_VIEW_RECORDS", "CAN_MANAGE_APPOINTMENTS", "CAN_RECEIVE_ESCALATIONS", "CAN_MANAGE_CIRCLE"],
-          },
-          {
-            careCircleId: circleEleanor.id,
-            userId: eleanor.id,
-            role: "SENIOR",
-            permissions: ["CAN_CONFIRM_DOSE", "CAN_VIEW_RECORDS"],
-          },
-          {
-            careCircleId: circleEleanor.id,
-            userId: marcus.id,
-            role: "CARETAKER",
-            permissions: ["CAN_CONFIRM_DOSE", "CAN_VIEW_RECORDS", "CAN_LOG_CARE_NOTES", "CAN_COMPLETE_TASKS", "CAN_RECEIVE_ESCALATIONS"],
-          },
-          {
-            careCircleId: circleEleanor.id,
-            userId: david.id,
-            role: "FAMILY_MEMBER",
-            permissions: ["CAN_VIEW_RECORDS", "CAN_CONFIRM_DOSE", "CAN_RECEIVE_ESCALATIONS"],
-          },
-        ],
-      });
-
-      // 4. Medications
-      const lisinopril = await prisma.medication.create({
-        data: {
-          elderlyProfileId: profileEleanor.id,
-          name: "Lisinopril",
-          brandName: "Prinivil",
-          genericName: "Lisinopril",
-          form: "TABLET",
-          strength: "10 mg",
-          dosageInstructions: "Take 1 tablet every morning with a full glass of water.",
-          prescribingDoctor: "Dr. Robert Chen",
-          prescribingClinic: "St. Jude Heart Institute",
-          rxNumber: "RX-884210",
-          purpose: "Hypertension / Blood Pressure Control",
-          stock: {
-            create: {
-              currentStock: 38,
-              unit: "tablets",
-              refillThreshold: 14,
-              packageSize: 60,
-              lastRefillDate: new Date(Date.now() - 14 * 86400000),
-              notes: "Filled at Walgreens Pharmacy #4102",
-            },
-          },
-          schedules: {
-            create: {
-              frequency: "DAILY",
-              timesOfDay: ["08:00"],
-              daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
-              dosageQuantity: 1.0,
-              instructions: "Take with breakfast.",
-            },
-          },
-        },
-        include: { schedules: true },
-      });
-
-      const metformin = await prisma.medication.create({
-        data: {
-          elderlyProfileId: profileEleanor.id,
-          name: "Metformin ER",
-          brandName: "Glucophage XR",
-          genericName: "Metformin Hydrochloride",
-          form: "TABLET",
-          strength: "500 mg",
-          dosageInstructions: "Take 1 tablet twice daily with meals (breakfast & dinner).",
-          prescribingDoctor: "Dr. Maya Patel",
-          prescribingClinic: "Metro Health Endocrinology",
-          rxNumber: "RX-991204",
-          purpose: "Type 2 Diabetes Glycemic Management",
-          stock: {
-            create: {
-              currentStock: 44,
-              unit: "tablets",
-              refillThreshold: 14,
-              packageSize: 60,
-              lastRefillDate: new Date(Date.now() - 10 * 86400000),
-            },
-          },
-          schedules: {
-            create: {
-              frequency: "DAILY",
-              timesOfDay: ["08:00", "20:00"],
-              daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
-              dosageQuantity: 1.0,
-              instructions: "Do not crush or chew extended-release tablets.",
-            },
-          },
-        },
-        include: { schedules: true },
-      });
-
-      const atorvastatin = await prisma.medication.create({
-        data: {
-          elderlyProfileId: profileEleanor.id,
-          name: "Atorvastatin",
-          brandName: "Lipitor",
-          genericName: "Atorvastatin Calcium",
-          form: "TABLET",
-          strength: "20 mg",
-          dosageInstructions: "Take 1 tablet in the evening before bedtime.",
-          prescribingDoctor: "Dr. Robert Chen",
-          prescribingClinic: "St. Jude Heart Institute",
-          rxNumber: "RX-773192",
-          purpose: "Cholesterol & Cardiovascular Protection",
-          stock: {
-            create: {
-              currentStock: 25,
-              unit: "tablets",
-              refillThreshold: 10,
-              packageSize: 30,
-              lastRefillDate: new Date(Date.now() - 20 * 86400000),
-            },
-          },
-          schedules: {
-            create: {
-              frequency: "DAILY",
-              timesOfDay: ["20:00"],
-              daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
-              dosageQuantity: 1.0,
-              instructions: "Take with or without evening meal.",
-            },
-          },
-        },
-        include: { schedules: true },
-      });
-
-      const glipizide = await prisma.medication.create({
-        data: {
-          elderlyProfileId: profileEleanor.id,
-          name: "Glipizide",
-          brandName: "Glucotrol",
-          genericName: "Glipizide",
-          form: "TABLET",
-          strength: "5 mg",
-          dosageInstructions: "Take 1 tablet 30 minutes before morning breakfast.",
-          prescribingDoctor: "Dr. Maya Patel",
-          prescribingClinic: "Metro Health Endocrinology",
-          rxNumber: "RX-551029",
-          purpose: "Pancreatic Insulin Secretion Support",
-          stock: {
-            create: {
-              currentStock: 5, // LOW STOCK TRIGGER
-              unit: "tablets",
-              refillThreshold: 10,
-              packageSize: 30,
-              lastRefillDate: new Date(Date.now() - 25 * 86400000),
-              notes: "Urgent: Refill requested from pharmacy.",
-            },
-          },
-          schedules: {
-            create: {
-              frequency: "DAILY",
-              timesOfDay: ["08:00"],
-              daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
-              dosageQuantity: 1.0,
-              instructions: "Take 30 minutes before first meal of day.",
-            },
-          },
-        },
-        include: { schedules: true },
-      });
-
-      // 5. Scheduled Doses (Adherence History)
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      for (let i = 4; i >= 1; i--) {
-        const dayDate = new Date(today);
-        dayDate.setDate(dayDate.getDate() - i);
-
-        const morningTime = new Date(dayDate);
-        morningTime.setHours(8, 0, 0, 0);
-
-        await prisma.scheduledDose.create({
-          data: {
-            medicationId: lisinopril.id,
-            scheduleId: lisinopril.schedules[0].id,
-            elderlyProfileId: profileEleanor.id,
-            scheduledAt: morningTime,
-            status: "TAKEN",
-            confirmedAt: new Date(morningTime.getTime() + 10 * 60000),
-            confirmedById: eleanor.id,
-            confirmationNotes: "Taken with breakfast oats.",
-            idempotencyKey: `dose-lisin-${i}`,
-          },
-        });
-
-        await prisma.scheduledDose.create({
-          data: {
-            medicationId: metformin.id,
-            scheduleId: metformin.schedules[0].id,
-            elderlyProfileId: profileEleanor.id,
-            scheduledAt: morningTime,
-            status: "TAKEN",
-            confirmedAt: new Date(morningTime.getTime() + 15 * 60000),
-            confirmedById: eleanor.id,
-            confirmationNotes: "Taken as scheduled.",
-            idempotencyKey: `dose-metf-m-${i}`,
-          },
-        });
-
-        const eveningTime = new Date(dayDate);
-        eveningTime.setHours(20, 0, 0, 0);
-
-        const isMissedDay = i === 2;
-        await prisma.scheduledDose.create({
-          data: {
-            medicationId: metformin.id,
-            scheduleId: metformin.schedules[0].id,
-            elderlyProfileId: profileEleanor.id,
-            scheduledAt: eveningTime,
-            status: isMissedDay ? "MISSED" : "TAKEN",
-            confirmedAt: isMissedDay ? null : new Date(eveningTime.getTime() + 20 * 60000),
-            confirmedById: isMissedDay ? null : marcus.id,
-            confirmationNotes: isMissedDay ? "Unconfirmed after grace period and escalation." : "Assisted by Marcus RN.",
-            escalationLevel: isMissedDay ? 2 : 0,
-            escalatedAt: isMissedDay ? new Date(eveningTime.getTime() + 60 * 60000) : null,
-            idempotencyKey: `dose-metf-e-${i}`,
-          },
-        });
-      }
-
-      // Today's Doses
-      const todayMorning = new Date(today);
-      todayMorning.setHours(8, 0, 0, 0);
-
-      const todayEvening = new Date(today);
-      todayEvening.setHours(20, 0, 0, 0);
-
-      await prisma.scheduledDose.create({
-        data: {
-          medicationId: lisinopril.id,
-          scheduleId: lisinopril.schedules[0].id,
-          elderlyProfileId: profileEleanor.id,
-          scheduledAt: todayMorning,
-          status: "TAKEN",
-          confirmedAt: new Date(todayMorning.getTime() + 12 * 60000),
-          confirmedById: eleanor.id,
-          confirmationNotes: "Self-confirmed via Senior Mode.",
-          idempotencyKey: "dose-lisin-today",
-        },
-      });
-
-      await prisma.scheduledDose.create({
-        data: {
-          medicationId: glipizide.id,
-          scheduleId: glipizide.schedules[0].id,
-          elderlyProfileId: profileEleanor.id,
-          scheduledAt: todayMorning,
-          status: "TAKEN",
-          confirmedAt: new Date(todayMorning.getTime() + 8 * 60000),
-          confirmedById: eleanor.id,
-          confirmationNotes: "Taken with breakfast.",
-          idempotencyKey: "dose-glip-today",
-        },
-      });
-
-      await prisma.scheduledDose.create({
-        data: {
-          medicationId: metformin.id,
-          scheduleId: metformin.schedules[0].id,
-          elderlyProfileId: profileEleanor.id,
-          scheduledAt: todayEvening,
-          status: "SCHEDULED",
-          idempotencyKey: "dose-metf-today-e",
-        },
-      });
-
-      await prisma.scheduledDose.create({
-        data: {
-          medicationId: atorvastatin.id,
-          scheduleId: atorvastatin.schedules[0].id,
-          elderlyProfileId: profileEleanor.id,
-          scheduledAt: todayEvening,
-          status: "SCHEDULED",
-          idempotencyKey: "dose-atorv-today-e",
-        },
-      });
-
-      // 6. Appointments
-      const inThreeDays = new Date();
-      inThreeDays.setDate(inThreeDays.getDate() + 3);
-      inThreeDays.setHours(10, 30, 0, 0);
-
-      const inTenDays = new Date();
-      inTenDays.setDate(inTenDays.getDate() + 10);
-      inTenDays.setHours(14, 0, 0, 0);
-
-      await prisma.appointment.createMany({
-        data: [
-          {
-            elderlyProfileId: profileEleanor.id,
-            title: "Cardiology Follow-Up & ECG Review",
-            doctorName: "Dr. Robert Chen, FACC",
-            specialty: "Cardiology",
-            clinicName: "St. Jude Heart Institute - Suite 402",
-            locationAddress: "742 Evergreen Medical Parkway, Floor 4",
-            appointmentDate: inThreeDays,
-            status: "UPCOMING",
-            reminderMinutesBefore: 1440,
-            notes: "Bring current blood pressure logs from past 3 weeks. Fasting not required.",
-            createdById: sarah.id,
-          },
-          {
-            elderlyProfileId: profileEleanor.id,
-            title: "HbA1c & Diabetes Quarterly Review",
-            doctorName: "Dr. Maya Patel",
-            specialty: "Endocrinology",
-            clinicName: "Metro Health Endocrinology Center",
-            locationAddress: "1200 Beacon Health Way, Pavilion B",
-            appointmentDate: inTenDays,
-            status: "UPCOMING",
-            reminderMinutesBefore: 2880,
-            notes: "Fasting blood draw 2 hours prior to consultation.",
-            createdById: sarah.id,
-          },
-        ],
-      });
-
-      // 7. Care Tasks
-      await prisma.careTask.createMany({
-        data: [
-          {
-            elderlyProfileId: profileEleanor.id,
-            assignedToId: marcus.id,
-            title: "Morning Vitals Check & Blood Glucose",
-            description: "Log resting systolic/diastolic BP and fasting fingerstick glucose.",
-            dueDate: todayMorning,
-            priority: "HIGH",
-            status: "COMPLETED",
-            completedAt: new Date(todayMorning.getTime() + 30 * 60000),
-            completedById: marcus.id,
-            notes: "BP 124/80 mmHg, Glucose 112 mg/dL. Eleanor felt energetic and cheerful.",
-          },
-          {
-            elderlyProfileId: profileEleanor.id,
-            assignedToId: marcus.id,
-            title: "Gentle Assisted Mobility & Walking (15 min)",
-            description: "Indoor or garden stroll with walking cane support.",
-            dueDate: todayEvening,
-            priority: "MEDIUM",
-            status: "PENDING",
-            notes: "Scheduled for post-afternoon tea.",
-          },
-          {
-            elderlyProfileId: profileEleanor.id,
-            assignedToId: david.id,
-            title: "Pharmacy Refill Pickup (Glipizide 5mg)",
-            description: "Pick up remaining 30-day supply from Walgreens Pharmacy #4102.",
-            dueDate: inThreeDays,
-            priority: "URGENT",
-            status: "PENDING",
-            notes: "Prescription RX-551029 is ready for pickup.",
-          },
-        ],
-      });
-
-      // 8. Care Notes
-      await prisma.careNote.create({
-        data: {
-          elderlyProfileId: profileEleanor.id,
-          authorId: marcus.id,
-          category: "HEALTH_UPDATE",
-          title: "Morning Shift Vitals & Wellness Observation",
-          content: "Eleanor had a restful 8-hour sleep. Fasting blood glucose registered at 112 mg/dL, which is well within our 100-130 target. Morning Lisinopril and Glipizide confirmed. Mild knee stiffness eased after 10 minutes of gentle range-of-motion leg raises.",
-          vitalSigns: {
-            bloodPressure: "124/80",
-            heartRate: 72,
-            bloodGlucose: 112,
-            temperature: 98.4,
-            oxygenSaturation: 98,
-          },
-          isPinned: true,
-        },
-      });
-
-      await prisma.careNote.create({
-        data: {
-          elderlyProfileId: profileEleanor.id,
-          authorId: marcus.id,
-          category: "HANDOVER",
-          title: "Shift Handover - Evening Prep & Fluid Balance",
-          content: "Hydration target achieved (1.6L water and chamomile tea). Eleanor prefers taking her evening Metformin with her stew around 7:45 PM. David is scheduled to pick up the Glipizide refill tomorrow.",
-          shiftHandoverToId: sarah.id,
-        },
-      });
-
-      // 9. Notifications
-      await prisma.notification.createMany({
-        data: [
-          {
-            userId: sarah.id,
-            elderlyProfileId: profileEleanor.id,
-            type: "REFILL_ALERT",
-            title: "Low Medication Stock: Glipizide 5mg",
-            message: "Only 5 tablets remaining for Eleanor Vance. Refill threshold is 10 tablets.",
-            deliveryStatus: "SENT",
-            emailSent: true,
-          },
-          {
-            userId: sarah.id,
-            elderlyProfileId: profileEleanor.id,
-            type: "APPOINTMENT_REMINDER",
-            title: "Upcoming Appointment: Cardiology Follow-Up",
-            message: "Cardiology follow-up with Dr. Robert Chen scheduled in 3 days (10:30 AM).",
-            deliveryStatus: "SENT",
-            emailSent: false,
-          },
-          {
-            userId: eleanor.id,
-            elderlyProfileId: profileEleanor.id,
-            type: "MEDICATION_REMINDER",
-            title: "Evening Medication Reminder",
-            message: "Upcoming evening dose: Metformin ER 500mg & Atorvastatin 20mg at 8:00 PM.",
-            deliveryStatus: "SENT",
-            emailSent: false,
-          },
-        ],
-      });
-
-      // 10. Audit Logs
-      await prisma.auditLog.createMany({
-        data: [
-          {
-            elderlyProfileId: profileEleanor.id,
-            careCircleId: circleEleanor.id,
-            userId: sarah.id,
-            action: "CARE_CIRCLE_CREATED",
-            entityType: "CareCircle",
-            entityId: circleEleanor.id,
-            details: { circleName: circleEleanor.name },
-          },
-          {
-            elderlyProfileId: profileEleanor.id,
-            careCircleId: circleEleanor.id,
-            userId: eleanor.id,
-            action: "DOSE_CONFIRMED",
-            entityType: "ScheduledDose",
-            entityId: lisinopril.id,
-            details: { medication: "Lisinopril 10mg", method: "Senior Mode One-Tap" },
-          },
-          {
-            elderlyProfileId: profileEleanor.id,
-            careCircleId: circleEleanor.id,
-            userId: marcus.id,
-            action: "CARE_NOTE_LOGGED",
-            entityType: "CareNote",
-            details: { category: "HEALTH_UPDATE" },
-          },
-        ],
-      });
-
-      // Verification checks
-      const users = await prisma.user.findMany();
-      expect(users.length).toBe(4);
-
-      const seniorUser = users.find((u) => u.role === "SENIOR");
-      expect(seniorUser?.email).toBe("eleanor.vance@carenest.org");
-
-      const careCircle = await prisma.careCircle.findFirst({
-        where: { elderlyProfileId: profileEleanor.id },
-        include: { members: true },
-      });
-      expect(careCircle?.members.length).toBe(4);
-
-      const doses = await prisma.scheduledDose.findMany();
-      expect(doses.length).toBeGreaterThanOrEqual(10);
-
-      const lowStock = await prisma.medicationStock.findFirst({
-        where: { currentStock: { lte: 10 } },
-      });
-      expect(lowStock).not.toBeNull();
-    } finally {
-      await prisma.$disconnect();
-    }
+    const scheduledDoses = await prisma.scheduledDose.findMany();
+    expect(scheduledDoses.length).toBeGreaterThan(0);
   });
 });

@@ -17,6 +17,9 @@ import {
   ShieldCheck,
   Heart,
   AlertCircle,
+  CheckCircle2,
+  Check,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -86,7 +89,7 @@ interface FamilyDashboardClientProps {
   currentUserId: string;
 }
 
-type FamilyTab = "overview" | "vitals" | "medications" | "appointments" | "circle" | "timeline" | "analytics";
+type FamilyTab = "overview" | "vitals" | "medications" | "appointments" | "circle" | "caretakers" | "timeline" | "analytics";
 
 export function FamilyDashboardClient({
   adminUser,
@@ -102,6 +105,92 @@ export function FamilyDashboardClient({
 }: FamilyDashboardClientProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = React.useState<FamilyTab>("overview");
+
+  // Caretaker Requests & Management state
+  const [caretakerRequests, setCaretakerRequests] = React.useState<any[]>([]);
+  const [loadingRequests, setLoadingRequests] = React.useState(false);
+  const [requestActionLoading, setRequestActionLoading] = React.useState<string | null>(null);
+  const [requestSuccessNotice, setRequestSuccessNotice] = React.useState<string | null>(null);
+
+  const loadCaretakerRequests = React.useCallback(async () => {
+    setLoadingRequests(true);
+    try {
+      const res = await fetch("/api/family/caretaker-requests");
+      if (res.ok) {
+        const data = await res.json();
+        setCaretakerRequests(data.requests || []);
+      }
+    } catch {
+      // quiet fail
+    } finally {
+      setLoadingRequests(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    loadCaretakerRequests();
+  }, [loadCaretakerRequests]);
+
+  const handleRespondCaretakerRequest = async (
+    requestId: string,
+    action: "APPROVE" | "REJECT",
+    reason?: string
+  ) => {
+    setRequestActionLoading(requestId);
+    setRequestSuccessNotice(null);
+    try {
+      const res = await fetch(`/api/family/caretaker-requests/${requestId}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, rejectionReason: reason }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setRequestSuccessNotice(data.message || `Caretaker request ${action.toLowerCase()}d successfully`);
+        setTimeout(() => setRequestSuccessNotice(null), 5000);
+        await loadCaretakerRequests();
+        router.refresh();
+      } else {
+        alert(data.error || "Failed to process request");
+      }
+    } catch {
+      alert("Network error while responding to caretaker request");
+    } finally {
+      setRequestActionLoading(null);
+    }
+  };
+
+  const handleRevokeCaretaker = async (requestId: string, caretakerName: string) => {
+    if (
+      !confirm(
+        `Are you sure you want to revoke monitoring access for ${caretakerName}? This caretaker will immediately lose all access to this patient's medical records.`
+      )
+    ) {
+      return;
+    }
+    setRequestActionLoading(requestId);
+    setRequestSuccessNotice(null);
+    try {
+      const res = await fetch(`/api/family/caretaker-requests/${requestId}/revoke`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "Revoked by family administrator" }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setRequestSuccessNotice(data.message || `Caretaker access revoked successfully`);
+        setTimeout(() => setRequestSuccessNotice(null), 5000);
+        await loadCaretakerRequests();
+        router.refresh();
+      } else {
+        alert(data.error || "Failed to revoke access");
+      }
+    } catch {
+      alert("Network error while revoking caretaker access");
+    } finally {
+      setRequestActionLoading(null);
+    }
+  };
 
   // Modals state
   const [showAddApptModal, setShowAddApptModal] = React.useState(false);
@@ -614,6 +703,16 @@ export function FamilyDashboardClient({
                       </a>
                     )}
                   </div>
+
+                  <div className="pt-2 border-t border-teal-200/60">
+                    <button
+                      onClick={() => setActiveTab("caretakers")}
+                      className="text-[11px] font-bold text-teal-800 hover:text-teal-950 flex items-center gap-1.5 transition-colors"
+                    >
+                      <ShieldCheck className="h-3.5 w-3.5 text-teal-700" />
+                      Manage Caretaker Access {caretakerRequests.filter((r) => r.status === "PENDING" && (!profile || r.elderlyProfileId === profile.id)).length > 0 ? `(${caretakerRequests.filter((r) => r.status === "PENDING" && (!profile || r.elderlyProfileId === profile.id)).length} Pending)` : ""} →
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-2 text-xs">
@@ -622,8 +721,17 @@ export function FamilyDashboardClient({
                     <span>Caretaker Pending Assignment</span>
                   </div>
                   <p className="text-slate-600 leading-relaxed">
-                    No licensed caretaker is currently assigned to this care circle. The coordination team automatically allocates registered caretakers based on patient capacity.
+                    No licensed caretaker is currently assigned to this care circle. When caretakers request monitoring access, review and approve them under Caretaker Requests.
                   </p>
+                  <div className="pt-2 border-t border-amber-200/60">
+                    <button
+                      onClick={() => setActiveTab("caretakers")}
+                      className="text-[11px] font-bold text-teal-800 hover:text-teal-950 flex items-center gap-1.5 transition-colors"
+                    >
+                      <ShieldCheck className="h-3.5 w-3.5 text-teal-700" />
+                      View Caretaker Requests {caretakerRequests.filter((r) => r.status === "PENDING" && (!profile || r.elderlyProfileId === profile.id)).length > 0 ? `(${caretakerRequests.filter((r) => r.status === "PENDING" && (!profile || r.elderlyProfileId === profile.id)).length} Pending)` : ""} →
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -661,6 +769,14 @@ export function FamilyDashboardClient({
               { id: "medications", label: `Medications (${medications.length}) - Read Only`, icon: Pill },
               { id: "appointments", label: `Appointments (${appointments.length})`, icon: Calendar },
               { id: "circle", label: `Care Circle (${members.length})`, icon: Users },
+              {
+                id: "caretakers",
+                label:
+                  caretakerRequests.filter((r) => r.status === "PENDING" && (!profile || r.elderlyProfileId === profile.id)).length > 0
+                    ? `Caretaker Requests (${caretakerRequests.filter((r) => r.status === "PENDING" && (!profile || r.elderlyProfileId === profile.id)).length})`
+                    : "Caretakers",
+                icon: ShieldCheck,
+              },
               { id: "timeline", label: "Healthcare Timeline", icon: Clock },
               { id: "analytics", label: "Adherence Analytics", icon: TrendingUp },
             ].map((tab) => {
@@ -1350,6 +1466,264 @@ export function FamilyDashboardClient({
                   </CardContent>
                 </Card>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* ======================================================== */}
+        {/* TAB 5B: CARETAKER REQUESTS & ACCESS MANAGEMENT            */}
+        {/* ======================================================== */}
+        {activeTab === "caretakers" && (
+          <div className="space-y-8">
+            {requestSuccessNotice && (
+              <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-xs font-semibold text-emerald-900 flex items-center justify-between shadow-xs">
+                <div className="flex items-center space-x-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>{requestSuccessNotice}</span>
+                </div>
+                <button
+                  onClick={() => setRequestSuccessNotice(null)}
+                  className="text-xs font-bold underline"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            {/* Part 1: Incoming Access Requests */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <ShieldCheck className="h-5 w-5 text-teal-700" />
+                    <h3 className="text-xl font-black text-slate-900 tracking-tight">
+                      Incoming Caretaker Access Requests
+                    </h3>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Certified healthcare staff requesting monitoring and care authority for {profile.name}. Review credentials and license details before approving.
+                  </p>
+                </div>
+                <Badge variant="outline" className="text-xs">
+                  {caretakerRequests.filter((r) => r.status === "PENDING" && (!profile || r.elderlyProfileId === profile.id)).length} Pending
+                </Badge>
+              </div>
+
+              {loadingRequests ? (
+                <div className="p-8 text-center text-xs text-slate-500 bg-white rounded-3xl border border-slate-200">
+                  Loading caretaker requests...
+                </div>
+              ) : caretakerRequests.filter((r) => r.status === "PENDING" && (!profile || r.elderlyProfileId === profile.id)).length === 0 ? (
+                <Card className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-xs">
+                  <ShieldCheck className="h-10 w-10 text-slate-300 mx-auto mb-2" />
+                  <h4 className="text-sm font-bold text-slate-800">
+                    No pending caretaker requests
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                    When licensed nurses or caretakers discover {profile.name} and submit a monitoring request, their credentials will appear here for your review and approval.
+                  </p>
+                </Card>
+              ) : (
+                <div className="space-y-4">
+                  {caretakerRequests
+                    .filter((r) => r.status === "PENDING" && (!profile || r.elderlyProfileId === profile.id))
+                    .map((req) => {
+                      const cp = req.caretaker?.caretakerProfile;
+                      const isProcessing = requestActionLoading === req.id;
+
+                      return (
+                        <Card
+                          key={req.id}
+                          className="rounded-3xl border-2 border-teal-200/80 bg-white p-6 shadow-xs hover:shadow-sm transition-all"
+                        >
+                          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6">
+                            <div className="space-y-3 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="text-base font-black text-slate-900">
+                                  {req.caretaker?.name || "Licensed Care Staff"}
+                                </h4>
+                                {cp?.professionalCategory && (
+                                  <Badge className="bg-teal-700 text-white font-bold text-xs">
+                                    {cp.professionalCategory}
+                                  </Badge>
+                                )}
+                                <Badge className="bg-amber-600 text-white font-bold text-[10px]">
+                                  Awaiting Your Review
+                                </Badge>
+                              </div>
+
+                              <p className="text-xs text-slate-500">
+                                Email: <strong>{req.caretaker?.email}</strong>
+                                {req.caretaker?.phoneNumber && ` • Phone: ${req.caretaker.phoneNumber}`}
+                                {` • Requested on: ${new Date(req.requestedAt).toLocaleDateString([], {
+                                  month: "short",
+                                  day: "numeric",
+                                  year: "numeric",
+                                })}`}
+                              </p>
+
+                              {/* Caretaker Credentials Grid */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 pt-1 text-xs">
+                                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                  <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                                    Qualification
+                                  </span>
+                                  <span className="font-bold text-slate-900 mt-0.5 block">
+                                    {cp?.qualification || "Healthcare Credential"}
+                                  </span>
+                                </div>
+
+                                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                  <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                                    License / Registration #
+                                  </span>
+                                  <span className="font-mono font-bold text-slate-900 mt-0.5 block">
+                                    {cp?.registrationNumber || "Verified Staff"}
+                                  </span>
+                                </div>
+
+                                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                                  <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                                    Issuing Authority & State
+                                  </span>
+                                  <span className="font-bold text-slate-900 mt-0.5 block">
+                                    {cp?.issuingAuthority
+                                      ? `${cp.issuingAuthority} (${cp.state})`
+                                      : cp?.state || "State Council"}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Caretaker optional note */}
+                              {req.notes && (
+                                <div className="rounded-xl border border-teal-100 bg-teal-50/50 p-3 text-xs text-slate-700">
+                                  <span className="font-bold text-teal-900 block mb-0.5">
+                                    Message from Caretaker:
+                                  </span>
+                                  <p className="italic">&quot;{req.notes}&quot;</p>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Action Buttons */}
+                            <div className="flex flex-row lg:flex-col items-center justify-end gap-2 border-t lg:border-t-0 lg:border-l border-slate-100 pt-4 lg:pt-0 lg:pl-6 shrink-0">
+                              <Button
+                                size="sm"
+                                onClick={() => handleRespondCaretakerRequest(req.id, "APPROVE")}
+                                disabled={isProcessing}
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs w-full"
+                              >
+                                <Check className="h-3.5 w-3.5 mr-1" />
+                                {isProcessing ? "Processing..." : "Accept Request"}
+                              </Button>
+
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleRespondCaretakerRequest(req.id, "REJECT")}
+                                disabled={isProcessing}
+                                className="border-rose-300 text-rose-700 hover:bg-rose-50 font-bold text-xs w-full"
+                              >
+                                <X className="h-3.5 w-3.5 mr-1 text-rose-600" />
+                                Decline
+                              </Button>
+                            </div>
+                          </div>
+                        </Card>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+
+            {/* Part 2: Active Assigned Caretakers */}
+            <div className="space-y-4 pt-4 border-t border-slate-200">
+              <div>
+                <h3 className="text-xl font-black text-slate-900 tracking-tight">
+                  Active Caretakers for {profile.name}
+                </h3>
+                <p className="text-xs text-slate-600 mt-1">
+                  Licensed caretakers currently linked to this care circle. Revoking access immediately cuts medical records and telemetry access.
+                </p>
+              </div>
+
+              {members.filter((m: any) => m.role === "CARETAKER").length === 0 ? (
+                <Card className="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-xs">
+                  <p className="text-xs text-slate-500">
+                    No licensed caretakers are currently active on {profile.name}&apos;s care circle.
+                  </p>
+                </Card>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {members
+                    .filter((m: any) => m.role === "CARETAKER")
+                    .map((m: any) => {
+                      const matchedReq = caretakerRequests.find(
+                        (r) => r.caretakerId === m.userId && r.elderlyProfileId === profile.id
+                      );
+
+                      return (
+                        <Card
+                          key={m.id}
+                          className="rounded-3xl border border-slate-200 bg-white p-5 shadow-xs space-y-4"
+                        >
+                          <div className="flex items-start justify-between">
+                            <div className="flex items-center space-x-3">
+                              <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-teal-100 font-bold text-sm text-teal-800">
+                                {m.user?.name?.[0] || "C"}
+                              </div>
+                              <div>
+                                <h4 className="text-sm font-bold text-slate-900">
+                                  {m.user?.name}
+                                </h4>
+                                <span className="text-[11px] text-slate-400 block">
+                                  {m.user?.email}
+                                </span>
+                                {m.user?.phoneNumber && (
+                                  <span className="text-[11px] font-semibold text-teal-800 block">
+                                    📞 {m.user.phoneNumber}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <Badge className="bg-emerald-600 text-white font-bold text-[10px]">
+                              Active Monitoring
+                            </Badge>
+                          </div>
+
+                          <div className="rounded-xl bg-slate-50 p-3 text-xs space-y-1">
+                            <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                              Access Scope
+                            </span>
+                            <span className="text-slate-700 font-semibold block">
+                              Medication administration, vital telemetry logging, and shift handovers.
+                            </span>
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                            <span className="text-[10px] text-slate-400">
+                              Immediate Access Revocation
+                            </span>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => {
+                                if (matchedReq) {
+                                  handleRevokeCaretaker(matchedReq.id, m.user?.name || "Caretaker");
+                                } else {
+                                  handleRevokeMember(m.id);
+                                }
+                              }}
+                              className="text-xs font-bold shadow-xs"
+                            >
+                              Revoke Access
+                            </Button>
+                          </div>
+                        </Card>
+                      );
+                    })}
+                </div>
+              )}
             </div>
           </div>
         )}
