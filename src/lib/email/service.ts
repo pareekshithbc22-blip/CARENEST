@@ -1,15 +1,19 @@
 /**
  * CareNest Transactional Email Infrastructure
- * Provides resilient email delivery with Resend provider support
- * and local development fallback with audit tracking.
+ * Provides resilient, production-ready email delivery with:
+ * 1) Universal SMTP transport (e.g. Gmail App Password, Brevo, SendGrid, Postmark)
+ * 2) Resend HTTP API provider
+ * 3) Strict delivery verification & error transparency (never claiming success when dispatch fails)
  */
 
+import nodemailer from "nodemailer";
+import type { Transporter } from "nodemailer";
 import { getAppUrl } from "@/lib/config";
 
 export interface EmailResult {
   success: boolean;
   messageId?: string;
-  provider: "RESEND" | "LOCAL_FALLBACK";
+  provider: "SMTP" | "RESEND" | "LOCAL_FALLBACK" | "NONE";
   isSimulated: boolean;
   error?: string;
 }
@@ -19,7 +23,45 @@ export interface SendEmailOptions {
   subject: string;
   html: string;
   text?: string;
-  type?: "MEDICATION" | "MISSED_DOSE" | "ESCALATION" | "APPOINTMENT" | "INVITATION" | "OTP_VERIFICATION";
+  type?:
+    | "MEDICATION"
+    | "MISSED_DOSE"
+    | "ESCALATION"
+    | "APPOINTMENT"
+    | "INVITATION"
+    | "OTP_VERIFICATION";
+}
+
+let cachedTransporter: Transporter | null = null;
+
+function getSmtpTransporter(): Transporter | null {
+  const host = process.env.SMTP_HOST;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
+
+  if (!host || !user || !pass) {
+    return null;
+  }
+
+  const port = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 465;
+  const secure = process.env.SMTP_SECURE === "true" || port === 465;
+
+  if (!cachedTransporter) {
+    cachedTransporter = nodemailer.createTransport({
+      host,
+      port,
+      secure,
+      auth: {
+        user,
+        pass: pass.replace(/\s+/g, ""), // Strip spaces from Google 16-character App Passwords
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+    });
+  }
+
+  return cachedTransporter;
 }
 
 /**
@@ -32,16 +74,76 @@ export async function sendEmail({
   text,
   type = "MEDICATION",
 }: SendEmailOptions): Promise<EmailResult> {
-  const apiKey = process.env.RESEND_API_KEY;
-  const fromAddress = process.env.EMAIL_FROM || "CareNest <notifications@carenest.health>";
+  const isTest = process.env.NODE_ENV === "test" || process.env.VITEST === "true";
 
-  // If Resend API Key is provided, attempt delivery through Resend HTTP API
+  // -----------------------------------------------------------
+  // Provider Option 1: Universal SMTP (Gmail App Password, Brevo, SendGrid, etc.)
+  // -----------------------------------------------------------
+  const smtpTransporter = getSmtpTransporter();
+  if (smtpTransporter) {
+    const smtpUser = process.env.SMTP_USER!;
+    const fromAddress =
+      process.env.EMAIL_FROM || `"CareNest Health" <${smtpUser}>`;
+
+    try {
+      const info = await smtpTransporter.sendMail({
+        from: fromAddress,
+        to,
+        subject,
+        html,
+        text: text || subject,
+      });
+
+      const accepted = (info.accepted || []).map((addr: unknown) => String(addr).toLowerCase());
+      const isAccepted = accepted.length > 0 && accepted.includes(to.toLowerCase());
+
+      if (isAccepted || info.messageId) {
+        return {
+          success: true,
+          messageId: info.messageId,
+          provider: "SMTP",
+          isSimulated: false,
+        };
+      } else {
+        return {
+          success: false,
+          error: "SMTP server rejected the recipient email address.",
+          provider: "SMTP",
+          isSimulated: false,
+        };
+      }
+    } catch (err: any) {
+      console.error(`[CareNest Email] SMTP delivery failure to ${to}:`, err);
+      let errMsg = err.message || "Failed to deliver email via SMTP";
+      if (
+        err.code === "EAUTH" ||
+        (typeof err.message === "string" && err.message.includes("535"))
+      ) {
+        errMsg =
+          "SMTP authentication failed. If using Gmail, ensure you use a 16-character Google App Password (myaccount.google.com/apppasswords) with 2-Step Verification enabled.";
+      }
+      return {
+        success: false,
+        error: errMsg,
+        provider: "SMTP",
+        isSimulated: false,
+      };
+    }
+  }
+
+  // -----------------------------------------------------------
+  // Provider Option 2: Resend HTTP API
+  // -----------------------------------------------------------
+  const apiKey = process.env.RESEND_API_KEY;
   if (apiKey && apiKey.trim().length > 0 && !apiKey.includes("your-resend-api-key")) {
+    const fromAddress =
+      process.env.EMAIL_FROM || "CareNest <onboarding@resend.dev>";
+
     try {
       const response = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${apiKey.trim()}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -62,18 +164,27 @@ export async function sendEmail({
           isSimulated: false,
         };
       } else {
-        const errData = await response.json();
+        const errData = await response.json().catch(() => ({}));
         console.warn(`[CareNest Email] Resend API error:`, errData);
-        // Fall back to logged audit
+
+        let errMsg = errData.message || "Resend API rejected message";
+        if (
+          errData.name === "validation_error" &&
+          typeof errData.message === "string" &&
+          errData.message.includes("You can only send testing emails to your own email address")
+        ) {
+          errMsg = `Resend free tier restriction: 'onboarding@resend.dev' can only send to your own registered account email. To deliver to '${to}', configure Gmail SMTP credentials in .env or verify your domain at resend.com.`;
+        }
+
         return {
           success: false,
-          error: errData.message || "Resend API rejected message",
+          error: errMsg,
           provider: "RESEND",
           isSimulated: false,
         };
       }
     } catch (err: any) {
-      console.error(`[CareNest Email] Delivery exception:`, err);
+      console.error(`[CareNest Email] Resend delivery exception:`, err);
       return {
         success: false,
         error: err.message || "Network exception during email dispatch",
@@ -83,22 +194,38 @@ export async function sendEmail({
     }
   }
 
-  // Development & Evaluation Fallback
-  // Resend API Key is not configured: log transparently and do not pretend it reached the inbox
+  // -----------------------------------------------------------
+  // Offline Automated Test Environment (Vitest Mock)
+  // -----------------------------------------------------------
+  if (isTest) {
+    return {
+      success: true,
+      messageId: `test-mock-${Date.now()}`,
+      provider: "LOCAL_FALLBACK",
+      isSimulated: true,
+    };
+  }
+
+  // -----------------------------------------------------------
+  // Unconfigured State (Development or Production)
+  // Transparently inform the user and abort — NEVER pretend success!
+  // -----------------------------------------------------------
   const divider = "========================================================";
-  console.log(`\n${divider}`);
-  console.log(`📧 [CareNest Proactive Email Fallback]`);
-  console.log(`Type:       ${type}`);
-  console.log(`To:         ${to}`);
-  console.log(`Subject:    ${subject}`);
-  console.log(`Status:     Logged locally (RESEND_API_KEY not configured)`);
-  console.log(`${divider}\n`);
+  console.warn(`\n${divider}`);
+  console.warn(`⚠️ [CareNest Email Provider Warning]`);
+  console.warn(`No active email provider configured in .env!`);
+  console.warn(`Email Type: ${type}`);
+  console.warn(`Recipient:  ${to}`);
+  console.warn(`Subject:    ${subject}`);
+  console.warn(`Action Required: Configure Gmail SMTP or Resend API in .env to deliver real emails to inboxes.`);
+  console.warn(`${divider}\n`);
 
   return {
-    success: true,
-    messageId: `sim-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-    provider: "LOCAL_FALLBACK",
-    isSimulated: true,
+    success: false,
+    error:
+      "Email delivery service is not configured. Please configure Gmail SMTP (SMTP_HOST, SMTP_USER, SMTP_PASS) or RESEND_API_KEY in .env to deliver real verification codes.",
+    provider: "NONE",
+    isSimulated: false,
   };
 }
 
@@ -161,34 +288,34 @@ export async function sendMedicationReminderEmail({
   to,
   seniorName,
   medicationName,
-  strength,
+  dosage,
+  instructions,
   scheduledTime,
-  dosageInstructions,
 }: {
   to: string;
   seniorName: string;
   medicationName: string;
-  strength: string;
+  dosage: string;
+  instructions: string;
   scheduledTime: string;
-  dosageInstructions: string;
 }): Promise<EmailResult> {
-  const subject = `Medication Reminder: ${medicationName} (${strength}) for ${seniorName}`;
+  const subject = `Medication Reminder: ${medicationName} for ${seniorName}`;
   const html = generateBaseEmailWrapper(
     subject,
     `
       <span class="badge badge-info">Scheduled Medication Dose</span>
-      <h2 style="margin-top: 0; font-size: 20px; color: #0f172a;">Upcoming Medication Reminder</h2>
-      <p style="color: #334155;">This is a scheduled reminder for <strong>${seniorName}</strong> to take their prescribed medication.</p>
+      <h2 style="margin-top: 0; font-size: 20px; color: #0f172a;">Upcoming Dose Reminder</h2>
+      <p style="color: #334155;">This is a scheduled reminder that <strong>${seniorName}</strong> is due for medication.</p>
       
       <div class="info-card">
+        <div class="info-row"><span class="info-label">Patient:</span><span class="info-value">${seniorName}</span></div>
         <div class="info-row"><span class="info-label">Medication:</span><span class="info-value">${medicationName}</span></div>
-        <div class="info-row"><span class="info-label">Strength:</span><span class="info-value">${strength}</span></div>
-        <div class="info-row"><span class="info-label">Scheduled Time:</span><span class="info-value">${scheduledTime}</span></div>
-        <div class="info-row"><span class="info-label">Instructions:</span><span class="info-value">${dosageInstructions}</span></div>
+        <div class="info-row"><span class="info-label">Dosage:</span><span class="info-value">${dosage}</span></div>
+        <div class="info-row"><span class="info-label">Instructions:</span><span class="info-value">${instructions}</span></div>
+        <div class="info-row"><span class="info-label">Scheduled For:</span><span class="info-value">${scheduledTime}</span></div>
       </div>
 
-      <p style="color: #64748b; font-size: 13px;">Please log into the CareNest Senior Dashboard or Family Dashboard once the dose is administered.</p>
-      <a href="${getAppUrl()}/dashboard" class="btn">Confirm Dose Administration</a>
+      <a href="${getAppUrl()}/dashboard/senior" class="btn">View Schedule on CareNest</a>
     `
   );
 
@@ -196,40 +323,43 @@ export async function sendMedicationReminderEmail({
 }
 
 /**
- * Missed dose alert email template
+ * Missed dose warning email template (Tier 1)
  */
 export async function sendMissedDoseAlertEmail({
   to,
   seniorName,
   medicationName,
-  strength,
   scheduledTime,
+  caretakerName,
+  strength,
   gracePeriodMinutes,
 }: {
   to: string;
   seniorName: string;
   medicationName: string;
-  strength: string;
   scheduledTime: string;
-  gracePeriodMinutes: number;
+  caretakerName?: string;
+  strength?: string;
+  gracePeriodMinutes?: number;
 }): Promise<EmailResult> {
-  const subject = `⚠️ Alert: Unconfirmed Dose for ${seniorName} - ${medicationName}`;
+  const subject = `⚠️ Alert: Missed Dose for ${seniorName} - ${medicationName}`;
   const html = generateBaseEmailWrapper(
     subject,
     `
-      <span class="badge badge-warning">Grace Period Elapsed</span>
+      <span class="badge badge-warning">Tier 1 Missed Dose Alert</span>
       <h2 style="margin-top: 0; font-size: 20px; color: #92400e;">Unconfirmed Medication Dose</h2>
-      <p style="color: #334155;">The scheduled dose for <strong>${seniorName}</strong> has not been confirmed after the <strong>${gracePeriodMinutes}-minute</strong> grace window.</p>
+      <p style="color: #334155;">Hello ${caretakerName || "Care Coordinator"},</p>
+      <p style="color: #334155;">The scheduled dose of <strong>${medicationName}</strong> for <strong>${seniorName}</strong> at <strong>${scheduledTime}</strong> has passed its grace window and remains unconfirmed.</p>
       
       <div class="info-card">
         <div class="info-row"><span class="info-label">Patient:</span><span class="info-value">${seniorName}</span></div>
-        <div class="info-row"><span class="info-label">Medication:</span><span class="info-value">${medicationName} (${strength})</span></div>
-        <div class="info-row"><span class="info-label">Scheduled For:</span><span class="info-value">${scheduledTime}</span></div>
-        <div class="info-row"><span class="info-label">Status:</span><span class="info-value" style="color: #b45309;">UNCONFIRMED / ATTENTION NEEDED</span></div>
+        <div class="info-row"><span class="info-label">Medication:</span><span class="info-value">${medicationName}${strength ? ` (${strength})` : ""}</span></div>
+        <div class="info-row"><span class="info-label">Scheduled Time:</span><span class="info-value">${scheduledTime}</span></div>
+        ${gracePeriodMinutes ? `<div class="info-row"><span class="info-label">Grace Window:</span><span class="info-value">${gracePeriodMinutes} mins elapsed</span></div>` : ""}
+        <div class="info-row"><span class="info-label">Status:</span><span class="info-value" style="color: #d97706;">Pending Confirmation</span></div>
       </div>
 
-      <p style="color: #334155; font-size: 14px;">Please check in with ${seniorName} or contact their primary caretaker to verify that the dose is taken safely.</p>
-      <a href="${getAppUrl()}/dashboard/family" class="btn">View Care Dashboard</a>
+      <a href="${getAppUrl()}/dashboard/caretaker" class="btn">Confirm Dose Administration</a>
     `
   );
 
@@ -237,9 +367,9 @@ export async function sendMissedDoseAlertEmail({
 }
 
 /**
- * Urgent caregiver escalation email template
+ * Family escalation email template (Tier 2)
  */
-export async function sendCaregiverEscalationEmail({
+export async function sendEscalationAlertEmail({
   to,
   seniorName,
   medicationName,
@@ -276,6 +406,8 @@ export async function sendCaregiverEscalationEmail({
 
   return sendEmail({ to, subject, html, type: "ESCALATION" });
 }
+
+export const sendCaregiverEscalationEmail = sendEscalationAlertEmail;
 
 /**
  * Appointment reminder email template
@@ -364,7 +496,7 @@ export async function sendCareCircleInvitationEmail({
 }
 
 /**
- * Family Administrator Email OTP Verification template
+ * Email OTP Verification template
  */
 export async function sendOtpVerificationEmail({
   to,
@@ -381,8 +513,8 @@ export async function sendOtpVerificationEmail({
     `
       <span class="badge badge-info">Identity Verification</span>
       <h2 style="margin-top: 0; font-size: 20px; color: #0f172a;">Verify Your Email Address</h2>
-      <p style="color: #334155;">Hello <strong>${name || "Family Administrator"}</strong>,</p>
-      <p style="color: #334155;">Welcome to CARENEST. Please use the following 6-digit verification code to complete your Family Administrator account registration:</p>
+      <p style="color: #334155;">Hello <strong>${name || "Care Coordinator"}</strong>,</p>
+      <p style="color: #334155;">Welcome to CARENEST. Please use the following 6-digit verification code to complete your registration:</p>
       
       <div style="background: #f0fdf4; border: 2px dashed #0f766e; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
         <span style="font-family: 'Courier New', Courier, monospace; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #0f766e;">
@@ -402,4 +534,3 @@ export async function sendOtpVerificationEmail({
 
   return sendEmail({ to, subject, html, type: "OTP_VERIFICATION" });
 }
-

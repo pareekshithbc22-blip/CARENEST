@@ -143,10 +143,15 @@ export async function requestEmailOtp(
     otp: rawOtp,
   });
 
-  if (!emailResult.success && emailResult.provider === "RESEND") {
+  if (!emailResult.success) {
+    // Clean up OTP record so user doesn't get blocked by cooldown when email delivery fails
+    await prisma.emailVerificationOtp.deleteMany({
+      where: { email: normalizedEmail },
+    });
+
     return {
       success: false,
-      error: emailResult.error || "Failed to dispatch email. Please verify the address.",
+      error: emailResult.error || "Failed to dispatch verification email. Please verify configuration.",
     };
   }
 
