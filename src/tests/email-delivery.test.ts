@@ -27,6 +27,7 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
       // Must NEVER pretend an email was sent if provider is unconfigured!
       expect(result.success).toBe(false);
       expect(result.provider).toBe("NONE");
+      expect(result.diagnosticCode).toBe("EMAIL_NOT_CONFIGURED");
       expect(result.error).toContain("Email delivery service is not configured");
     } finally {
       (process.env as Record<string, string | undefined>)["NODE_ENV"] = originalEnv;
@@ -87,6 +88,7 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
     expect(result.success).toBe(true);
     expect(result.provider).toBe("LOCAL_FALLBACK");
     expect(result.isSimulated).toBe(true);
+    expect(result.diagnosticCode).toBe("TEST_MOCK_ACCEPTED");
     expect(result.messageId).toBeDefined();
   });
 
@@ -117,9 +119,10 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
 
       // Provider was recognized as SMTP (attempted real delivery)
       expect(result.provider).toBe("SMTP");
+      expect(result.diagnosticCode).toBe("SMTP_AUTH_FAILED");
       // Since mock password is fake, it will fail authentication (not unconfigured)
       expect(result.success).toBe(false);
-      expect(result.error).toBeDefined();
+      expect(result.error).toContain("authentication failed");
     } finally {
       (process.env as Record<string, string | undefined>)["NODE_ENV"] = originalEnv;
       if (originalVitest) process.env.VITEST = originalVitest;
@@ -131,6 +134,49 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
       else delete process.env.SMTP_PASS;
       if (originalFrom) process.env.SMTP_FROM = originalFrom;
       else delete process.env.SMTP_FROM;
+    }
+  });
+
+  it("identifies specific missing credential when only one SMTP parameter is provided", async () => {
+    const originalEnv = process.env.NODE_ENV;
+    const originalVitest = process.env.VITEST;
+    const originalUser = process.env.SMTP_USER;
+    const originalPass = process.env.SMTP_PASS;
+
+    try {
+      (process.env as Record<string, string | undefined>)["NODE_ENV"] = "production";
+      delete process.env.VITEST;
+
+      // Case 1: USER provided, PASS missing
+      process.env.SMTP_USER = "tester@gmail.com";
+      delete process.env.SMTP_PASS;
+      const res1 = await sendEmail({
+        to: "recipient@gmail.com",
+        subject: "Test",
+        html: "<p>Test</p>",
+      });
+      expect(res1.success).toBe(false);
+      expect(res1.diagnosticCode).toBe("EMAIL_NOT_CONFIGURED");
+      expect(res1.error).toContain("SMTP_PASS");
+
+      // Case 2: PASS provided, USER missing
+      delete process.env.SMTP_USER;
+      process.env.SMTP_PASS = "sample-pass";
+      const res2 = await sendEmail({
+        to: "recipient@gmail.com",
+        subject: "Test",
+        html: "<p>Test</p>",
+      });
+      expect(res2.success).toBe(false);
+      expect(res2.diagnosticCode).toBe("EMAIL_NOT_CONFIGURED");
+      expect(res2.error).toContain("SMTP_USER");
+    } finally {
+      (process.env as Record<string, string | undefined>)["NODE_ENV"] = originalEnv;
+      if (originalVitest) process.env.VITEST = originalVitest;
+      if (originalUser) process.env.SMTP_USER = originalUser;
+      else delete process.env.SMTP_USER;
+      if (originalPass) process.env.SMTP_PASS = originalPass;
+      else delete process.env.SMTP_PASS;
     }
   });
 });

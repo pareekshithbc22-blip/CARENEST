@@ -23,6 +23,9 @@ export async function POST(req: Request) {
     const result = await verifyEmailOtp(email, otp);
 
     if (!result.success) {
+      console.warn(
+        `[CareNest OTP Diagnostics] Status: OTP_VERIFICATION_FAILED | Email: ${email.toLowerCase().trim()} | Reason: ${result.error}`
+      );
       return NextResponse.json(
         {
           error: result.error || "Verification failed.",
@@ -31,6 +34,10 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+
+    console.log(
+      `[CareNest OTP Diagnostics] Status: OTP_VERIFICATION_SUCCESS | Email: ${email.toLowerCase().trim()}`
+    );
 
     return NextResponse.json(
       {

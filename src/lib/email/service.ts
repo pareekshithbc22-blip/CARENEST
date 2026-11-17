@@ -10,12 +10,24 @@ import nodemailer from "nodemailer";
 import type { Transporter } from "nodemailer";
 import { getAppUrl } from "@/lib/config";
 
+export type EmailDiagnosticCode =
+  | "EMAIL_NOT_CONFIGURED"
+  | "SMTP_CONNECTION_FAILED"
+  | "SMTP_AUTH_FAILED"
+  | "SMTP_RECIPIENT_REJECTED"
+  | "SMTP_DELIVERY_FAILED"
+  | "SMTP_ACCEPTED"
+  | "RESEND_REJECTED"
+  | "RESEND_ACCEPTED"
+  | "TEST_MOCK_ACCEPTED";
+
 export interface EmailResult {
   success: boolean;
   messageId?: string;
   provider: "SMTP" | "RESEND" | "LOCAL_FALLBACK" | "NONE";
   isSimulated: boolean;
   error?: string;
+  diagnosticCode?: EmailDiagnosticCode;
 }
 
 export interface SendEmailOptions {
@@ -32,46 +44,84 @@ export interface SendEmailOptions {
     | "OTP_VERIFICATION";
 }
 
-let cachedTransporter: Transporter | null = null;
-let lastSmtpConfigKey: string | null = null;
+export interface SmtpConfigStatus {
+  isConfigured: boolean;
+  host: string;
+  port: number;
+  secure: boolean;
+  hasUser: boolean;
+  hasPass: boolean;
+  user?: string;
+  from?: string;
+  missingFields: string[];
+}
 
-function getSmtpTransporter(): Transporter | null {
+export function getSmtpConfigStatus(): SmtpConfigStatus {
+  const user = process.env.SMTP_USER?.trim() || "";
+  const pass = (process.env.SMTP_PASS || process.env.SMTP_PASSWORD)?.trim() || "";
   const host =
-    process.env.SMTP_HOST ||
-    (process.env.SMTP_USER?.includes("@gmail.com") ? "smtp.gmail.com" : undefined);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
+    process.env.SMTP_HOST?.trim() ||
+    (user.includes("@gmail.com") ? "smtp.gmail.com" : "smtp.gmail.com");
 
-  if (
-    !host ||
-    !user ||
-    !pass ||
-    user.trim().length === 0 ||
-    pass.trim().length === 0 ||
-    user.includes("your-email@gmail.com") ||
-    pass.includes("xxxx xxxx")
-  ) {
-    return null;
-  }
-
-  const rawPort = process.env.SMTP_PORT;
+  const rawPort = process.env.SMTP_PORT?.trim();
   const port = rawPort ? parseInt(rawPort, 10) : 465;
   const secure =
     process.env.SMTP_SECURE !== undefined
       ? process.env.SMTP_SECURE === "true"
       : port === 465;
-  const cleanPass = pass.replace(/\s+/g, "");
 
-  const configKey = `${host}:${port}:${secure}:${user}:${cleanPass}`;
+  const from = process.env.SMTP_FROM?.trim() || process.env.EMAIL_FROM?.trim() || "";
+
+  const missingFields: string[] = [];
+
+  const isUserValid =
+    user.length > 0 &&
+    !user.includes("your-email@gmail.com") &&
+    !user.includes("<my Gmail") &&
+    !user.startsWith("<");
+  const isPassValid =
+    pass.length > 0 &&
+    !pass.includes("xxxx xxxx") &&
+    !pass.includes("<my Gmail") &&
+    !pass.startsWith("<");
+
+  if (!isUserValid) missingFields.push("SMTP_USER");
+  if (!isPassValid) missingFields.push("SMTP_PASS");
+
+  return {
+    isConfigured: missingFields.length === 0,
+    host,
+    port,
+    secure,
+    hasUser: isUserValid,
+    hasPass: isPassValid,
+    user: isUserValid ? user : undefined,
+    from: from || undefined,
+    missingFields,
+  };
+}
+
+let cachedTransporter: Transporter | null = null;
+let lastSmtpConfigKey: string | null = null;
+
+function getSmtpTransporter(): Transporter | null {
+  const status = getSmtpConfigStatus();
+  if (!status.isConfigured || !status.user) {
+    return null;
+  }
+
+  const pass = (process.env.SMTP_PASS || process.env.SMTP_PASSWORD)!.replace(/\s+/g, "");
+  const configKey = `${status.host}:${status.port}:${status.secure}:${status.user}:${pass}`;
+
   if (!cachedTransporter || lastSmtpConfigKey !== configKey) {
     lastSmtpConfigKey = configKey;
     cachedTransporter = nodemailer.createTransport({
-      host,
-      port,
-      secure,
+      host: status.host,
+      port: status.port,
+      secure: status.secure,
       auth: {
-        user,
-        pass: cleanPass, // Strip spaces from Google 16-character App Passwords
+        user: status.user,
+        pass, // Cleaned 16-character Google App Password
       },
       connectionTimeout: 10000,
       greetingTimeout: 10000,
@@ -83,7 +133,7 @@ function getSmtpTransporter(): Transporter | null {
 }
 
 /**
- * Base email sending dispatcher
+ * Base email sending dispatcher with production diagnostics
  */
 export async function sendEmail({
   to,
@@ -97,13 +147,14 @@ export async function sendEmail({
   // -----------------------------------------------------------
   // Provider Option 1: Universal SMTP (Gmail App Password, Brevo, SendGrid, etc.)
   // -----------------------------------------------------------
+  const smtpStatus = getSmtpConfigStatus();
   const smtpTransporter = getSmtpTransporter();
-  if (smtpTransporter) {
-    const smtpUser = process.env.SMTP_USER!;
+
+  if (smtpTransporter && smtpStatus.isConfigured && smtpStatus.user) {
     const fromAddress =
       process.env.SMTP_FROM ||
       process.env.EMAIL_FROM ||
-      `"CareNest Health" <${smtpUser}>`;
+      `"CareNest Health" <${smtpStatus.user}>`;
 
     try {
       const info = await smtpTransporter.sendMail({
@@ -118,35 +169,75 @@ export async function sendEmail({
       const isAccepted = accepted.length > 0 && accepted.includes(to.toLowerCase());
 
       if (isAccepted || info.messageId) {
+        console.log(
+          `[CareNest Email Diagnostics] Status: SMTP_ACCEPTED | Provider: SMTP | Recipient: ${to} | MessageId: ${info.messageId || "N/A"} | Response: ${info.response || "250 OK"}`
+        );
         return {
           success: true,
           messageId: info.messageId,
           provider: "SMTP",
           isSimulated: false,
+          diagnosticCode: "SMTP_ACCEPTED",
         };
       } else {
+        const errMsg = `The SMTP server did not accept recipient '${to}'.`;
+        console.error(`[CareNest Email Diagnostics] Status: SMTP_RECIPIENT_REJECTED | Recipient: ${to}`);
         return {
           success: false,
-          error: "SMTP server rejected the recipient email address.",
+          error: errMsg,
           provider: "SMTP",
           isSimulated: false,
+          diagnosticCode: "SMTP_RECIPIENT_REJECTED",
         };
       }
     } catch (err: any) {
-      console.error(`[CareNest Email] SMTP delivery failure to ${to}:`, err);
-      let errMsg = err.message || "Failed to deliver email via SMTP";
-      if (
-        err.code === "EAUTH" ||
-        (typeof err.message === "string" && err.message.includes("535"))
-      ) {
-        errMsg =
-          "SMTP authentication failed. If using Gmail, ensure you use a 16-character Google App Password (myaccount.google.com/apppasswords) with 2-Step Verification enabled.";
+      const errCode = err.code || "";
+      const errResponse = String(err.response || "");
+      const errMessage = String(err.message || "");
+
+      const isAuthError =
+        errCode === "EAUTH" ||
+        err.responseCode === 535 ||
+        errResponse.includes("535") ||
+        errMessage.includes("535") ||
+        errMessage.includes("Invalid login") ||
+        errMessage.includes("BadCredentials");
+
+      const isConnError =
+        errCode === "ECONNREFUSED" ||
+        errCode === "ETIMEDOUT" ||
+        errCode === "ENOTFOUND" ||
+        errCode === "ESOCKETTIMEDOUT" ||
+        errCode === "ECONNRESET";
+
+      let diagnosticCode: EmailDiagnosticCode = "SMTP_DELIVERY_FAILED";
+      let userFriendlyMessage = errMessage || "Failed to deliver email via SMTP.";
+
+      if (isAuthError) {
+        diagnosticCode = "SMTP_AUTH_FAILED";
+        userFriendlyMessage =
+          "Gmail SMTP authentication failed. Please verify that 2-Step Verification is enabled on your Google Account and that you are using a 16-character App Password generated at https://myaccount.google.com/apppasswords without typos.";
+        console.error(
+          `[CareNest Email Diagnostics] Status: SMTP_AUTH_FAILED | Provider: SMTP | Recipient: ${to} | Detail: Google rejected credentials (535 Bad Credentials)`
+        );
+      } else if (isConnError) {
+        diagnosticCode = "SMTP_CONNECTION_FAILED";
+        userFriendlyMessage = `SMTP connection failed: Unable to connect to ${smtpStatus.host}:${smtpStatus.port}. Please check network connectivity and firewall rules.`;
+        console.error(
+          `[CareNest Email Diagnostics] Status: SMTP_CONNECTION_FAILED | Provider: SMTP | Recipient: ${to} | ErrorCode: ${errCode}`
+        );
+      } else {
+        console.error(
+          `[CareNest Email Diagnostics] Status: SMTP_DELIVERY_FAILED | Provider: SMTP | Recipient: ${to} | Error: ${errMessage}`
+        );
       }
+
       return {
         success: false,
-        error: errMsg,
+        error: userFriendlyMessage,
         provider: "SMTP",
         isSimulated: false,
+        diagnosticCode,
       };
     }
   }
@@ -177,15 +268,19 @@ export async function sendEmail({
 
       if (response.ok) {
         const data = await response.json();
+        console.log(
+          `[CareNest Email Diagnostics] Status: RESEND_ACCEPTED | Provider: RESEND | Recipient: ${to} | MessageId: ${data.id}`
+        );
         return {
           success: true,
           messageId: data.id,
           provider: "RESEND",
           isSimulated: false,
+          diagnosticCode: "RESEND_ACCEPTED",
         };
       } else {
         const errData = await response.json().catch(() => ({}));
-        console.warn(`[CareNest Email] Resend API error:`, errData);
+        console.warn(`[CareNest Email Diagnostics] Status: RESEND_REJECTED | Recipient: ${to} | Error:`, errData);
 
         let errMsg = errData.message || "Resend API rejected message";
         if (
@@ -193,7 +288,7 @@ export async function sendEmail({
           typeof errData.message === "string" &&
           errData.message.includes("You can only send testing emails to your own email address")
         ) {
-          errMsg = `Resend free tier restriction: 'onboarding@resend.dev' can only send to your own registered account email. To deliver to '${to}', configure Gmail SMTP credentials in .env or verify your domain at resend.com.`;
+          errMsg = `Resend free tier restriction: 'onboarding@resend.dev' can only send to your own registered account email. To deliver to '${to}', configure Gmail SMTP credentials in .env.local or verify your domain at resend.com.`;
         }
 
         return {
@@ -201,15 +296,17 @@ export async function sendEmail({
           error: errMsg,
           provider: "RESEND",
           isSimulated: false,
+          diagnosticCode: "RESEND_REJECTED",
         };
       }
     } catch (err: any) {
-      console.error(`[CareNest Email] Resend delivery exception:`, err);
+      console.error(`[CareNest Email Diagnostics] Status: RESEND_REJECTED | Recipient: ${to} | Exception:`, err);
       return {
         success: false,
         error: err.message || "Network exception during email dispatch",
         provider: "RESEND",
         isSimulated: false,
+        diagnosticCode: "RESEND_REJECTED",
       };
     }
   }
@@ -223,6 +320,7 @@ export async function sendEmail({
       messageId: `test-mock-${Date.now()}`,
       provider: "LOCAL_FALLBACK",
       isSimulated: true,
+      diagnosticCode: "TEST_MOCK_ACCEPTED",
     };
   }
 
@@ -230,22 +328,32 @@ export async function sendEmail({
   // Unconfigured State (Development or Production)
   // Transparently inform the user and abort — NEVER pretend success!
   // -----------------------------------------------------------
+  let unconfiguredMessage =
+    "Email delivery service is not configured. Please configure Gmail SMTP (SMTP_HOST, SMTP_USER, SMTP_PASS) or RESEND_API_KEY in .env or .env.local to deliver real verification codes.";
+
+  if (smtpStatus.missingFields.length === 1 && smtpStatus.missingFields[0] === "SMTP_PASS") {
+    unconfiguredMessage =
+      "Gmail SMTP username (SMTP_USER) is configured, but SMTP_PASS (Google 16-character App Password) is missing in .env or .env.local.";
+  } else if (smtpStatus.missingFields.length === 1 && smtpStatus.missingFields[0] === "SMTP_USER") {
+    unconfiguredMessage =
+      "Gmail SMTP password (SMTP_PASS) is configured, but SMTP_USER (your Gmail address) is missing in .env or .env.local.";
+  }
+
   const divider = "========================================================";
   console.warn(`\n${divider}`);
   console.warn(`⚠️ [CareNest Email Provider Warning]`);
-  console.warn(`No active email provider configured in .env!`);
-  console.warn(`Email Type: ${type}`);
-  console.warn(`Recipient:  ${to}`);
-  console.warn(`Subject:    ${subject}`);
-  console.warn(`Action Required: Configure Gmail SMTP or Resend API in .env to deliver real emails to inboxes.`);
+  console.warn(`Status: EMAIL_NOT_CONFIGURED`);
+  console.warn(`Missing: ${smtpStatus.missingFields.join(", ") || "SMTP_USER, SMTP_PASS"}`);
+  console.warn(`Recipient: ${to}`);
+  console.warn(`Action Required: Enter your Gmail address and 16-character App Password in .env.local or .env.`);
   console.warn(`${divider}\n`);
 
   return {
     success: false,
-    error:
-      "Email delivery service is not configured. Please configure Gmail SMTP (SMTP_HOST, SMTP_USER, SMTP_PASS) or RESEND_API_KEY in .env to deliver real verification codes.",
+    error: unconfiguredMessage,
     provider: "NONE",
     isSimulated: false,
+    diagnosticCode: "EMAIL_NOT_CONFIGURED",
   };
 }
 
