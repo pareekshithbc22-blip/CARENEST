@@ -7,6 +7,12 @@ declare module "next-auth" {
       role: "SENIOR" | "FAMILY" | "CARETAKER" | "ADMIN";
       phoneNumber?: string | null;
       avatarUrl?: string | null;
+      twoFactorEnabled?: boolean;
+      twoFactorVerified?: boolean;
+      twoFactorPendingSetup?: boolean;
+      googleId?: string | null;
+      isEmailVerified?: boolean;
+      needsProfileCompletion?: boolean;
     } & DefaultSession["user"];
   }
 
@@ -15,6 +21,12 @@ declare module "next-auth" {
     role: "SENIOR" | "FAMILY" | "CARETAKER" | "ADMIN";
     phoneNumber?: string | null;
     avatarUrl?: string | null;
+    twoFactorEnabled?: boolean;
+    twoFactorVerified?: boolean;
+    twoFactorPendingSetup?: boolean;
+    googleId?: string | null;
+    isEmailVerified?: boolean;
+    needsProfileCompletion?: boolean;
   }
 }
 
@@ -24,5 +36,11 @@ declare module "next-auth/jwt" {
     role: "SENIOR" | "FAMILY" | "CARETAKER" | "ADMIN";
     phoneNumber?: string | null;
     avatarUrl?: string | null;
+    twoFactorEnabled?: boolean;
+    twoFactorVerified?: boolean;
+    twoFactorPendingSetup?: boolean;
+    googleId?: string | null;
+    isEmailVerified?: boolean;
+    needsProfileCompletion?: boolean;
   }
 }

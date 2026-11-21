@@ -24,6 +24,21 @@ export default async function FamilyDashboardPage({
     redirect("/login?callbackUrl=/dashboard/family");
   }
 
+  // Ensure email is verified before dashboard access
+  if (user.role !== "SENIOR" && !user.isEmailVerified) {
+    redirect("/verify-email");
+  }
+
+  // Enforce Authenticator-based 2FA for Family Administrators
+  if (user.role === "FAMILY" || user.role === "CARETAKER") {
+    if (!user.twoFactorEnabled) {
+      redirect("/auth/2fa/setup");
+    }
+    if (!user.twoFactorVerified) {
+      redirect("/auth/2fa/verify?callbackUrl=/dashboard/family");
+    }
+  }
+
   const profiles = await getAuthorizedProfiles(user.id);
 
   // If the Family Administrator has no senior profiles registered yet, render dashboard with empty state

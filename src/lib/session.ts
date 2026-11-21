@@ -11,5 +11,11 @@ export async function requireAuth() {
   if (!user) {
     throw new Error("UNAUTHORIZED");
   }
+  if (user.role !== "SENIOR" && !user.isEmailVerified) {
+    throw new Error("EMAIL_VERIFICATION_REQUIRED");
+  }
+  if ((user.role === "FAMILY" || user.role === "CARETAKER") && user.twoFactorVerified === false) {
+    throw new Error("TWO_FACTOR_REQUIRED");
+  }
   return user;
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { RegisterSchema } from "@/lib/validations";
-import { verifyVerificationToken } from "@/lib/otp";
+import { sendAccountVerificationEmail } from "@/lib/email-verification";
 
 export async function POST(req: Request) {
   try {
@@ -10,37 +10,16 @@ export async function POST(req: Request) {
     const validated = RegisterSchema.safeParse(body);
 
     if (!validated.success) {
+      const firstIssue = validated.error.issues[0];
+      const userMessage = firstIssue ? firstIssue.message : "Validation failed. Please check your details.";
       return NextResponse.json(
-        { error: "Validation failed", details: validated.error.flatten() },
+        { error: userMessage, details: validated.error.flatten() },
         { status: 400 }
       );
     }
 
-    const { email, password, name, role, phoneNumber, verificationToken, caretakerProfile } = validated.data;
+    const { email, password, name, role, phoneNumber, caretakerProfile } = validated.data;
     const normalizedEmail = email.toLowerCase().trim();
-
-    // Enforce email verification for Family Administrator and Caretaker
-    if (role === "FAMILY" || role === "CARETAKER") {
-      if (!verificationToken) {
-        return NextResponse.json(
-          {
-            error: `Email verification is required before completing ${role === "FAMILY" ? "Family Administrator" : "Caretaker"} registration. Please verify your email via OTP.`,
-          },
-          { status: 403 }
-        );
-      }
-
-      const isValidToken = verifyVerificationToken(verificationToken, normalizedEmail);
-      if (!isValidToken) {
-        return NextResponse.json(
-          {
-            error:
-              "Invalid or expired email verification token. Please verify your email address again.",
-          },
-          { status: 403 }
-        );
-      }
-    }
 
     if (role === "CARETAKER") {
       if (!caretakerProfile) {
@@ -57,15 +36,13 @@ export async function POST(req: Request) {
 
     if (existingUser) {
       return NextResponse.json(
-        { error: "An account with this email address already exists" },
+        { error: "An account with this email address already exists. Please sign in or use a different email." },
         { status: 409 }
       );
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const isEmailVerified =
-      role === "FAMILY" ||
-      (!!verificationToken && verifyVerificationToken(verificationToken, normalizedEmail));
+    const isEmailVerified = false; // Email verification link required before login
 
     const user = await prisma.$transaction(async (tx) => {
       const newUser = await tx.user.create({
@@ -76,7 +53,7 @@ export async function POST(req: Request) {
           role,
           phoneNumber,
           isEmailVerified,
-          emailVerified: isEmailVerified ? new Date() : null,
+          emailVerified: null,
         },
       });
 
@@ -185,9 +162,28 @@ export async function POST(req: Request) {
       return newUser;
     });
 
+    // Send single-use email verification link valid for 24 hours
+    // If email service is not configured, logs link to server console without crashing
+    let emailResult: any = { success: false, diagnosticCode: "EMAIL_NOT_CONFIGURED" };
+    try {
+      emailResult = await sendAccountVerificationEmail(normalizedEmail, name);
+    } catch (err: any) {
+      console.error("[Register Email Dispatch Error]:", err);
+    }
+
     return NextResponse.json(
       {
-        message: "Account registered successfully",
+        message: "Account created. Please check your email to verify.",
+        requiresEmailVerification: true,
+        email: normalizedEmail,
+        verificationUrl:
+          process.env.NODE_ENV !== "production" ? emailResult.verificationUrl : undefined,
+        emailDelivery: {
+          success: Boolean(emailResult.success),
+          provider: emailResult.provider || "NONE",
+          diagnosticCode: emailResult.diagnosticCode || "EMAIL_NOT_CONFIGURED",
+          error: emailResult.error,
+        },
         user: {
           id: user.id,
           email: user.email,
@@ -200,9 +196,22 @@ export async function POST(req: Request) {
     );
   } catch (err: any) {
     console.error("[Register API Error]:", err);
+
+    if (err.code === "P2002") {
+      return NextResponse.json(
+        { error: "An account with this email address already exists. Please sign in or use a different email." },
+        { status: 409 }
+      );
+    }
+
+    const clientMsg =
+      err.message && !err.message.includes("invocation") && !err.message.includes("PrismaClient")
+        ? err.message
+        : "Unable to complete registration. Please check your details and try again.";
+
     return NextResponse.json(
-      { error: "Internal server error during registration" },
-      { status: 500 }
+      { error: clientMsg },
+      { status: 400 }
     );
   }
 }

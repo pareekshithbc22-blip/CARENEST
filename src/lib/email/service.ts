@@ -624,6 +624,50 @@ export async function sendCareCircleInvitationEmail({
 }
 
 /**
+ * Email account verification link template (24-hour single-use token)
+ */
+export async function sendVerificationLinkEmail({
+  to,
+  name,
+  verificationUrl,
+}: {
+  to: string;
+  name: string;
+  verificationUrl: string;
+}): Promise<EmailResult> {
+  const subject = "Verify your CARENEST account";
+  const html = generateBaseEmailWrapper(
+    subject,
+    `
+      <span class="badge badge-success">Account Verification</span>
+      <h2 style="margin-top: 0; font-size: 20px; color: #0f172a;">Verify Your Email Address</h2>
+      <p style="color: #334155;">Hello <strong>${name || "Care Member"}</strong>,</p>
+      <p style="color: #334155;">Thank you for registering with CARENEST. Please click the button below to verify your email address and activate your account:</p>
+      
+      <div style="text-align: center; margin: 28px 0;">
+        <a href="${verificationUrl}" class="btn" style="background-color: #0f766e; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 700; display: inline-block;">
+          Verify Email & Activate Account
+        </a>
+      </div>
+
+      <div class="info-card">
+        <div class="info-row"><span class="info-label">Security:</span><span class="info-value">This link is single-use and expires in 24 hours.</span></div>
+        <div class="info-row"><span class="info-label">Recipient:</span><span class="info-value">${to}</span></div>
+      </div>
+
+      <p style="color: #64748b; font-size: 12px; margin-top: 20px;">
+        If the button above does not work, copy and paste this URL into your browser:<br/>
+        <a href="${verificationUrl}" style="color: #0f766e; word-break: break-all;">${verificationUrl}</a>
+      </p>
+
+      <p style="color: #94a3b8; font-size: 11px;">If you did not create a CARENEST account, you can safely ignore this email.</p>
+    `
+  );
+
+  return sendEmail({ to, subject, html, type: "INVITATION" });
+}
+
+/**
  * Email OTP Verification template
  */
 export async function sendOtpVerificationEmail({

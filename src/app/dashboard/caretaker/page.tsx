@@ -22,10 +22,29 @@ export default async function CaretakerDashboardPage({
     redirect("/login?callbackUrl=/dashboard/caretaker");
   }
 
+  // Ensure email is verified before dashboard access
+  if (user.role !== "SENIOR" && !user.isEmailVerified) {
+    redirect("/verify-email");
+  }
+
   // Fetch caretaker professional verification profile
   const caretakerProfile = await prisma.caretakerProfile.findUnique({
     where: { userId: user.id },
   });
+
+  if (!caretakerProfile) {
+    redirect("/auth/complete-profile?role=CARETAKER");
+  }
+
+  // Enforce Authenticator-based 2FA for Licensed Caretakers
+  if (user.role === "FAMILY" || user.role === "CARETAKER") {
+    if (!user.twoFactorEnabled) {
+      redirect("/auth/2fa/setup");
+    }
+    if (!user.twoFactorVerified) {
+      redirect("/auth/2fa/verify?callbackUrl=/dashboard/caretaker");
+    }
+  }
 
   // Accessible profiles (enforces verification status === "APPROVED" in permissions.ts)
   const profiles = await getAuthorizedProfiles(user.id);
