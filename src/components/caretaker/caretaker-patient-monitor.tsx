@@ -2,27 +2,29 @@
 
 import * as React from "react";
 import {
-  Heart,
-  Activity,
   Droplets,
-  Thermometer,
-  Wind,
-  Weight,
-  Radio,
-  User,
+  Activity,
+  Plus,
+  Clock,
+  Calendar,
   AlertCircle,
+  CheckCircle2,
+  AlertTriangle,
+  Pill,
+  CheckSquare,
   FileText,
+  User,
+  Shield,
+  Filter,
+  ChevronLeft,
+  ChevronRight,
+  RefreshCw,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-} from "recharts";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 export interface PatientProfile {
   id: string;
@@ -40,65 +42,110 @@ export interface MetricRecord {
   timestamp: string;
   dateFormatted: string;
   timeFormatted: string;
-  heartRate: number | null;
   bloodGlucose: number | null;
   bloodPressure: string | null;
   systolic: number | null;
   diastolic: number | null;
-  temperature: number | null;
-  oxygenSaturation: number | null;
-  weight: number | null;
   source: string;
   notes?: string | null;
   authorName?: string;
+  sugarEvaluation?: {
+    severity: "NORMAL" | "WARNING" | "CRITICAL";
+    label: string;
+    isAbnormal: boolean;
+    message?: string;
+  };
+  bpEvaluation?: {
+    severity: "NORMAL" | "WARNING" | "CRITICAL";
+    label: string;
+    isAbnormal: boolean;
+    message?: string;
+  };
 }
 
 interface CaretakerPatientMonitorProps {
   profiles: PatientProfile[];
   activeProfileId: string;
   onSelectProfile: (id: string) => void;
+  onMedicationCreated?: () => void;
+  onTaskCreated?: () => void;
 }
 
 export function CaretakerPatientMonitor({
   profiles,
   activeProfileId,
   onSelectProfile,
+  onMedicationCreated,
+  onTaskCreated,
 }: CaretakerPatientMonitorProps) {
-  const [timeframe, setTimeframe] = React.useState<"today" | "7d" | "30d">("7d");
+  const [timeframe, setTimeframe] = React.useState<"today" | "7d" | "30d" | "all">("7d");
   const [loading, setLoading] = React.useState(false);
   const [history, setHistory] = React.useState<MetricRecord[]>([]);
   const [latest, setLatest] = React.useState<MetricRecord | null>(null);
-  const [previous, setPrevious] = React.useState<MetricRecord | null>(null);
   const [lastSyncTime, setLastSyncTime] = React.useState<Date>(new Date());
-  const [activeChart, setActiveChart] = React.useState<"heart" | "glucose" | "bp">("heart");
+
+  // Pagination cursor state
+  const [cursor, setCursor] = React.useState<string | null>(null);
+  const [nextCursor, setNextCursor] = React.useState<string | null>(null);
+  const [cursorHistory, setCursorHistory] = React.useState<string[]>([]);
+
+  // Modals state
+  const [showReadingModal, setShowReadingModal] = React.useState(false);
+  const [showMedModal, setShowMedModal] = React.useState(false);
+  const [showTaskModal, setShowTaskModal] = React.useState(false);
+
+  // New Reading Form state (Blood Sugar & Blood Pressure only)
+  const [sugarInput, setSugarInput] = React.useState("");
+  const [systolicInput, setSystolicInput] = React.useState("");
+  const [diastolicInput, setDiastolicInput] = React.useState("");
+  const [readingNotes, setReadingNotes] = React.useState("");
+  const [savingReading, setSavingReading] = React.useState(false);
+  const [readingError, setReadingError] = React.useState<string | null>(null);
+
+  // New Medication Form state
+  const [medName, setMedName] = React.useState("");
+  const [medStrength, setMedStrength] = React.useState("");
+  const [medForm, setMedForm] = React.useState<string>("TABLET");
+  const [medDosageInstructions, setMedDosageInstructions] = React.useState("Take 1 tablet after meals with water");
+  const [medTimes, setMedTimes] = React.useState<string>("08:00, 20:00");
+  const [savingMed, setSavingMed] = React.useState(false);
+  const [medError, setMedError] = React.useState<string | null>(null);
+
+  // New Task Form state
+  const [taskTitle, setTaskTitle] = React.useState("");
+  const [taskDescription, setTaskDescription] = React.useState("");
+  const [taskDueDate, setTaskDueDate] = React.useState(new Date().toISOString().split("T")[0]);
+  const [taskPriority, setTaskPriority] = React.useState<"LOW" | "MEDIUM" | "HIGH" | "URGENT">("MEDIUM");
+  const [savingTask, setSavingTask] = React.useState(false);
+  const [taskError, setTaskError] = React.useState<string | null>(null);
 
   const currentPatient = profiles.find((p) => p.id === activeProfileId) || profiles[0];
   const currentPatientId = currentPatient?.id;
 
-  // Fetch metrics for currently selected profile & timeframe
+  // Fetch metrics for selected profile
   const fetchMetrics = React.useCallback(
-    async (isBackground = false) => {
+    async (targetCursor?: string | null, isBackground = false) => {
       if (!currentPatientId) return;
       if (!isBackground) setLoading(true);
 
       try {
-        const res = await fetch(
-          `/api/health-metrics?profileId=${encodeURIComponent(
-            currentPatientId
-          )}&timeframe=${encodeURIComponent(timeframe)}`
-        );
+        let url = `/api/health-metrics?profileId=${encodeURIComponent(currentPatientId)}&timeframe=${encodeURIComponent(timeframe)}&limit=15`;
+        if (targetCursor) {
+          url += `&cursor=${encodeURIComponent(targetCursor)}`;
+        }
+
+        const res = await fetch(url);
         if (res.ok) {
           const data = await res.json();
-          // Ensure data belongs strictly to the requested patient
           if (data.profileId === currentPatientId) {
             setHistory(data.history || []);
             setLatest(data.latest || null);
-            setPrevious(data.previous || null);
+            setNextCursor(data.nextCursor || null);
             setLastSyncTime(new Date());
           }
         }
       } catch (err) {
-        console.error("Failed to poll health metrics:", err);
+        console.error("Failed to load metrics:", err);
       } finally {
         if (!isBackground) setLoading(false);
       }
@@ -106,98 +153,360 @@ export function CaretakerPatientMonitor({
     [currentPatientId, timeframe]
   );
 
-  // Initial and profile-switch fetch
   React.useEffect(() => {
-    fetchMetrics(false);
+    setCursor(null);
+    setCursorHistory([]);
+    fetchMetrics(null, false);
   }, [fetchMetrics]);
 
-  // Live real-time polling (every 3.5 seconds)
-  React.useEffect(() => {
-    const timer = setInterval(() => {
-      fetchMetrics(true);
-    }, 3500);
+  // Handle pagination
+  const handleNextPage = () => {
+    if (!nextCursor) return;
+    setCursorHistory((prev) => [...prev, cursor || ""]);
+    setCursor(nextCursor);
+    fetchMetrics(nextCursor, false);
+  };
 
-    return () => clearInterval(timer);
-  }, [fetchMetrics]);
+  const handlePrevPage = () => {
+    if (cursorHistory.length === 0) return;
+    const prevHistory = [...cursorHistory];
+    const prevCursor = prevHistory.pop() || null;
+    setCursorHistory(prevHistory);
+    setCursor(prevCursor);
+    fetchMetrics(prevCursor, false);
+  };
+
+  // Submit Blood Sugar & Blood Pressure Reading
+  const handleSaveReading = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentPatientId) return;
+
+    setSavingReading(true);
+    setReadingError(null);
+
+    const sugarVal = sugarInput ? parseFloat(sugarInput) : null;
+    const sysVal = systolicInput ? parseInt(systolicInput, 10) : null;
+    const diaVal = diastolicInput ? parseInt(diastolicInput, 10) : null;
+
+    if (sugarVal === null && (sysVal === null || diaVal === null)) {
+      setReadingError("Please enter Blood Sugar or both Systolic & Diastolic Blood Pressure.");
+      setSavingReading(false);
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/health-metrics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          elderlyProfileId: currentPatientId,
+          bloodGlucose: sugarVal,
+          systolic: sysVal,
+          diastolic: diaVal,
+          notes: readingNotes.trim() || undefined,
+          source: "Licensed Nurse / Caretaker Clinical Observation",
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to record reading");
+      }
+
+      setSugarInput("");
+      setSystolicInput("");
+      setDiastolicInput("");
+      setReadingNotes("");
+      setShowReadingModal(false);
+      fetchMetrics(cursor, false);
+    } catch (err: any) {
+      setReadingError(err.message || "Failed to record reading");
+    } finally {
+      setSavingReading(false);
+    }
+  };
+
+  // Submit Medication Assignment
+  const handleSaveMedication = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentPatientId) return;
+
+    setSavingMed(true);
+    setMedError(null);
+
+    const timesArray = medTimes
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(t));
+
+    if (timesArray.length === 0) {
+      setMedError("Please enter valid times in 24-hour format (e.g. 08:00, 20:00)");
+      setSavingMed(false);
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/medications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          elderlyProfileId: currentPatientId,
+          name: medName.trim(),
+          strength: medStrength.trim(),
+          form: medForm,
+          dosageInstructions: medDosageInstructions.trim(),
+          frequency: "DAILY",
+          timesOfDay: timesArray,
+          initialStock: 30,
+          unit: "tablets",
+          refillThreshold: 7,
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to create medication");
+      }
+
+      setMedName("");
+      setMedStrength("");
+      setShowMedModal(false);
+      if (onMedicationCreated) onMedicationCreated();
+    } catch (err: any) {
+      setMedError(err.message || "Failed to assign medication");
+    } finally {
+      setSavingMed(false);
+    }
+  };
+
+  // Submit Care Task Assignment
+  const handleSaveTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentPatientId) return;
+
+    setSavingTask(true);
+    setTaskError(null);
+
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          elderlyProfileId: currentPatientId,
+          title: taskTitle.trim(),
+          description: taskDescription.trim() || undefined,
+          dueDate: new Date(taskDueDate).toISOString(),
+          priority: taskPriority,
+        }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to create task");
+      }
+
+      setTaskTitle("");
+      setTaskDescription("");
+      setShowTaskModal(false);
+      if (onTaskCreated) onTaskCreated();
+    } catch (err: any) {
+      setTaskError(err.message || "Failed to create task");
+    } finally {
+      setSavingTask(false);
+    }
+  };
+
+  const getSeverityBadge = (severity?: "NORMAL" | "WARNING" | "CRITICAL") => {
+    switch (severity) {
+      case "CRITICAL":
+        return (
+          <Badge className="bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950 dark:text-rose-300 font-bold text-[10px]">
+            Critical
+          </Badge>
+        );
+      case "WARNING":
+        return (
+          <Badge className="bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950 dark:text-amber-300 font-bold text-[10px]">
+            Warning
+          </Badge>
+        );
+      case "NORMAL":
+      default:
+        return (
+          <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950 dark:text-emerald-300 font-bold text-[10px]">
+            Normal
+          </Badge>
+        );
+    }
+  };
 
   return (
     <div className="space-y-6">
-      {/* Multi-Patient Selector Banner */}
+      {/* Patient Information & Clinical Actions Bar */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
           <div>
             <div className="flex items-center space-x-2">
-              <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse" />
               <span className="text-[11px] font-black uppercase tracking-wider text-teal-800 dark:text-teal-400">
-                Live Patient Monitoring Active
+                Patient Clinical Overview
+              </span>
+              <span className="text-slate-300 dark:text-slate-700">•</span>
+              <span className="text-xs text-slate-500">
+                Synced at {lastSyncTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </span>
             </div>
-            <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1">
-              Assigned Patient Health Telemetry
+            <h2 className="text-2xl font-black text-slate-900 dark:text-white mt-1">
+              {currentPatient ? (currentPatient.preferredName || currentPatient.name) : "No Patient Selected"}
             </h2>
-            <p className="text-xs text-slate-500">
-              Select an assigned patient to monitor their recorded vitals, trends, and clinical history in isolation.
-            </p>
+            <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-slate-600 dark:text-slate-400">
+              {currentPatient?.emergencyContactName && (
+                <span>
+                  <strong>Emergency Contact:</strong> {currentPatient.emergencyContactName} ({currentPatient.emergencyContactPhone})
+                </span>
+              )}
+              {currentPatient?.allergies && currentPatient.allergies.length > 0 && (
+                <span className="text-rose-600 dark:text-rose-400 font-semibold">
+                  Allergies: {currentPatient.allergies.join(", ")}
+                </span>
+              )}
+              {currentPatient?.medicalConditions && currentPatient.medicalConditions.length > 0 && (
+                <span>
+                  Conditions: {currentPatient.medicalConditions.join(", ")}
+                </span>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center space-x-2 text-xs font-semibold text-slate-500 self-start sm:self-auto">
-            <Radio className="h-4 w-4 text-emerald-600 animate-pulse" />
-            <span>
-              Synced: {lastSyncTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-            </span>
+          {/* Action Buttons: Record Vitals, Assign Med, Add Task */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              onClick={() => setShowReadingModal(true)}
+              className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs rounded-xl shadow-xs"
+            >
+              <Activity className="h-4 w-4 mr-1.5" />
+              Record Reading
+            </Button>
+            <Button
+              type="button"
+              onClick={() => setShowMedModal(true)}
+              variant="outline"
+              className="border-teal-700 text-teal-800 hover:bg-teal-50 font-bold text-xs rounded-xl"
+            >
+              <Pill className="h-4 w-4 mr-1.5" />
+              Assign Medication
+            </Button>
+            <Button
+              type="button"
+              onClick={() => setShowTaskModal(true)}
+              variant="outline"
+              className="border-slate-300 text-slate-700 hover:bg-slate-50 font-bold text-xs rounded-xl"
+            >
+              <CheckSquare className="h-4 w-4 mr-1.5" />
+              Add Task
+            </Button>
           </div>
         </div>
 
-        {/* Patient Selection Tabs / Buttons */}
-        <div className="pt-4 flex flex-wrap gap-2">
-          {profiles.map((p) => {
-            const isSelected = p.id === currentPatient?.id;
-            return (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => onSelectProfile(p.id)}
-                className={`flex items-center space-x-2.5 rounded-xl px-4 py-2.5 text-xs font-bold transition-all ${
-                  isSelected
-                    ? "bg-teal-700 text-white shadow-md shadow-teal-700/20"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
-                }`}
-              >
-                <User className="h-4 w-4" />
-                <span>{p.preferredName || p.name}</span>
-                {isSelected && (
-                  <Badge variant="outline" className="text-[9px] bg-teal-800 text-white border-teal-600 py-0 px-1.5">
-                    Active
-                  </Badge>
-                )}
-              </button>
-            );
-          })}
+        {/* Clinical Disclaimer Notice */}
+        <p className="mt-3 text-[11px] text-slate-400 dark:text-slate-500 italic">
+          * Clinical notice: Default alert thresholds configured for monitoring, not medical advice.
+        </p>
+      </div>
+
+      {/* Latest Vitals Overview: Blood Sugar & Blood Pressure Only */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Blood Sugar Card */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <div className="p-2.5 rounded-xl bg-teal-50 text-teal-700 dark:bg-teal-950/60 dark:text-teal-300">
+                <Droplets className="h-5 w-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">Blood Sugar (Glucose)</h4>
+                <p className="text-xs text-slate-500">Target: 70 - 140 mg/dL</p>
+              </div>
+            </div>
+            {latest?.sugarEvaluation ? getSeverityBadge(latest.sugarEvaluation.severity) : (
+              <Badge variant="outline" className="text-xs font-semibold">No Reading</Badge>
+            )}
+          </div>
+
+          <div className="mt-5 flex items-baseline justify-between">
+            <div>
+              <span className="text-3xl font-black text-slate-900 dark:text-white">
+                {latest?.bloodGlucose !== null && latest?.bloodGlucose !== undefined ? latest.bloodGlucose : "--"}
+              </span>
+              <span className="ml-1.5 text-xs font-bold text-slate-500">mg/dL</span>
+            </div>
+            {latest?.sugarEvaluation?.label && (
+              <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                {latest.sugarEvaluation.label}
+              </span>
+            )}
+          </div>
+
+          <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 flex justify-between">
+            <span>Last recorded: {latest ? `${latest.dateFormatted} at ${latest.timeFormatted}` : "None"}</span>
+            <span>{latest?.authorName ? `By ${latest.authorName}` : ""}</span>
+          </div>
+        </div>
+
+        {/* Blood Pressure Card */}
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <div className="p-2.5 rounded-xl bg-teal-50 text-teal-700 dark:bg-teal-950/60 dark:text-teal-300">
+                <Activity className="h-5 w-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-slate-900 dark:text-white">Blood Pressure</h4>
+                <p className="text-xs text-slate-500">Target: 90-120 / 60-80 mmHg</p>
+              </div>
+            </div>
+            {latest?.bpEvaluation ? getSeverityBadge(latest.bpEvaluation.severity) : (
+              <Badge variant="outline" className="text-xs font-semibold">No Reading</Badge>
+            )}
+          </div>
+
+          <div className="mt-5 flex items-baseline justify-between">
+            <div>
+              <span className="text-3xl font-black text-slate-900 dark:text-white">
+                {latest?.systolic && latest?.diastolic
+                  ? `${latest.systolic}/${latest.diastolic}`
+                  : latest?.bloodPressure || "--/--"}
+              </span>
+              <span className="ml-1.5 text-xs font-bold text-slate-500">mmHg</span>
+            </div>
+            {latest?.bpEvaluation?.label && (
+              <span className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                {latest.bpEvaluation.label}
+              </span>
+            )}
+          </div>
+
+          <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-500 flex justify-between">
+            <span>Last recorded: {latest ? `${latest.dateFormatted} at ${latest.timeFormatted}` : "None"}</span>
+            <span>{latest?.authorName ? `By ${latest.authorName}` : ""}</span>
+          </div>
         </div>
       </div>
 
-      {/* Selected Patient Health Overview Card */}
-      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900 space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      {/* Vitals History Table with Filters and Pagination */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
           <div>
-            <div className="flex items-center space-x-2">
-              <Badge variant="secondary" className="text-xs">
-                Patient Health Telemetry
-              </Badge>
-              <span className="text-xs font-semibold text-slate-500">
-                {currentPatient ? (currentPatient.preferredName || currentPatient.name) : "No Patient Selected"}
-              </span>
-            </div>
-            <h3 className="text-2xl font-black text-slate-900 dark:text-white mt-1">
-              {currentPatient?.preferredName || currentPatient?.name}
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+              Vitals History Table
             </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Isolated clinical view for {currentPatient?.name}. Health data is never blended with other patients.
+            <p className="text-xs text-slate-500">
+              Sequential clinical logs for blood sugar and blood pressure with status evaluations.
             </p>
           </div>
 
-          {/* Timeframe Selector */}
-          <div className="flex items-center rounded-xl bg-slate-100 p-1 text-xs font-bold dark:bg-slate-800">
+          {/* Timeframe Filter Buttons */}
+          <div className="flex items-center rounded-xl bg-slate-100 p-1 text-xs font-bold dark:bg-slate-800 self-start sm:self-auto">
             <button
               type="button"
               onClick={() => setTimeframe("today")}
@@ -218,7 +527,7 @@ export function CaretakerPatientMonitor({
                   : "text-slate-500 hover:text-slate-900"
               }`}
             >
-              Last 7 Days
+              7 Days
             </button>
             <button
               type="button"
@@ -229,378 +538,430 @@ export function CaretakerPatientMonitor({
                   : "text-slate-500 hover:text-slate-900"
               }`}
             >
-              Last 30 Days
+              30 Days
+            </button>
+            <button
+              type="button"
+              onClick={() => setTimeframe("all")}
+              className={`rounded-lg px-3 py-1.5 transition-all ${
+                timeframe === "all"
+                  ? "bg-white text-slate-900 shadow-xs dark:bg-slate-700 dark:text-white"
+                  : "text-slate-500 hover:text-slate-900"
+              }`}
+            >
+              All
             </button>
           </div>
         </div>
 
-        {/* 6 Vital Sign Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          {/* Heart Rate */}
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/40">
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">Heart Rate</span>
-              <Heart className="h-4 w-4 text-rose-500" />
-            </div>
-            <div className="mt-2 flex items-baseline space-x-1">
-              <span className="text-2xl font-black text-slate-900 dark:text-white">
-                {latest?.heartRate ? latest.heartRate : "--"}
-              </span>
-              <span className="text-[11px] font-bold text-slate-500">BPM</span>
-            </div>
-            <div className="mt-1 text-[10px] text-slate-500">
-              {previous?.heartRate && latest?.heartRate
-                ? `Prev: ${previous.heartRate} BPM`
-                : latest?.heartRate
-                ? "First recorded"
-                : "No data"}
-            </div>
-          </div>
-
-          {/* Blood Glucose */}
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/40">
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">Glucose</span>
-              <Droplets className="h-4 w-4 text-amber-500" />
-            </div>
-            <div className="mt-2 flex items-baseline space-x-1">
-              <span className="text-2xl font-black text-slate-900 dark:text-white">
-                {latest?.bloodGlucose ? latest.bloodGlucose : "--"}
-              </span>
-              <span className="text-[11px] font-bold text-slate-500">mg/dL</span>
-            </div>
-            <div className="mt-1 text-[10px] text-slate-500">
-              {previous?.bloodGlucose && latest?.bloodGlucose
-                ? `Prev: ${previous.bloodGlucose} mg/dL`
-                : latest?.bloodGlucose
-                ? "First recorded"
-                : "No data"}
-            </div>
-          </div>
-
-          {/* Blood Pressure */}
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/40">
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">Blood Pressure</span>
-              <Activity className="h-4 w-4 text-teal-600" />
-            </div>
-            <div className="mt-2 flex items-baseline space-x-1">
-              <span className="text-2xl font-black text-slate-900 dark:text-white">
-                {latest?.bloodPressure ? latest.bloodPressure : "--"}
-              </span>
-              <span className="text-[10px] font-bold text-slate-500">mmHg</span>
-            </div>
-            <div className="mt-1 text-[10px] text-slate-500">
-              {previous?.bloodPressure && latest?.bloodPressure
-                ? `Prev: ${previous.bloodPressure}`
-                : latest?.bloodPressure
-                ? "First recorded"
-                : "No data"}
-            </div>
-          </div>
-
-          {/* Temperature */}
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/40">
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">Temp</span>
-              <Thermometer className="h-4 w-4 text-orange-500" />
-            </div>
-            <div className="mt-2 flex items-baseline space-x-1">
-              <span className="text-2xl font-black text-slate-900 dark:text-white">
-                {latest?.temperature ? latest.temperature : "--"}
-              </span>
-              <span className="text-[11px] font-bold text-slate-500">Â°C</span>
-            </div>
-            <div className="mt-1 text-[10px] text-slate-500">
-              {previous?.temperature && latest?.temperature
-                ? `Prev: ${previous.temperature}Â°C`
-                : latest?.temperature
-                ? "First recorded"
-                : "No data"}
-            </div>
-          </div>
-
-          {/* Oxygen Saturation */}
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/40">
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">SpO2</span>
-              <Wind className="h-4 w-4 text-sky-500" />
-            </div>
-            <div className="mt-2 flex items-baseline space-x-1">
-              <span className="text-2xl font-black text-slate-900 dark:text-white">
-                {latest?.oxygenSaturation ? `${latest.oxygenSaturation}%` : "--"}
-              </span>
-            </div>
-            <div className="mt-1 text-[10px] text-slate-500">
-              {previous?.oxygenSaturation && latest?.oxygenSaturation
-                ? `Prev: ${previous.oxygenSaturation}%`
-                : latest?.oxygenSaturation
-                ? "First recorded"
-                : "No data"}
-            </div>
-          </div>
-
-          {/* Weight */}
-          <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/40">
-            <div className="flex items-center justify-between text-slate-500">
-              <span className="text-[11px] font-bold uppercase tracking-wider">Weight</span>
-              <Weight className="h-4 w-4 text-slate-600" />
-            </div>
-            <div className="mt-2 flex items-baseline space-x-1">
-              <span className="text-2xl font-black text-slate-900 dark:text-white">
-                {latest?.weight ? latest.weight : "--"}
-              </span>
-              <span className="text-[11px] font-bold text-slate-500">kg</span>
-            </div>
-            <div className="mt-1 text-[10px] text-slate-500">
-              {previous?.weight && latest?.weight
-                ? `Prev: ${previous.weight} kg`
-                : latest?.weight
-                ? "First recorded"
-                : "No data"}
-            </div>
-          </div>
-        </div>
-
-        {/* Separate Patient Health Graphs */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h4 className="text-sm font-bold text-slate-900 dark:text-white">
-                Patient Physiological Trends
-              </h4>
-              <p className="text-xs text-slate-500">
-                Visualizing recorded measurements for {currentPatient?.name} ({timeframe})
-              </p>
-            </div>
-
-            {/* Metric Chart Selector */}
-            <div className="flex items-center rounded-lg bg-slate-100 p-1 text-xs font-bold dark:bg-slate-800">
-              <button
-                type="button"
-                onClick={() => setActiveChart("heart")}
-                className={`rounded-md px-2.5 py-1 transition-all ${
-                  activeChart === "heart"
-                    ? "bg-rose-50 text-rose-700 shadow-2xs dark:bg-rose-950 dark:text-rose-300"
-                    : "text-slate-500 hover:text-slate-900"
-                }`}
-              >
-                Heart Rate (BPM)
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveChart("glucose")}
-                className={`rounded-md px-2.5 py-1 transition-all ${
-                  activeChart === "glucose"
-                    ? "bg-amber-50 text-amber-700 shadow-2xs dark:bg-amber-950 dark:text-amber-300"
-                    : "text-slate-500 hover:text-slate-900"
-                }`}
-              >
-                Glucose (mg/dL)
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveChart("bp")}
-                className={`rounded-md px-2.5 py-1 transition-all ${
-                  activeChart === "bp"
-                    ? "bg-teal-50 text-teal-700 shadow-2xs dark:bg-teal-950 dark:text-teal-300"
-                    : "text-slate-500 hover:text-slate-900"
-                }`}
-              >
-                Blood Pressure (mmHg)
-              </button>
-            </div>
-          </div>
-
-          {loading ? (
-            <div className="h-64 flex items-center justify-center text-xs text-slate-400">
-              Loading telemetry data...
-            </div>
-          ) : history.length === 0 ? (
-            <div className="h-64 rounded-xl border border-dashed border-slate-200 flex flex-col items-center justify-center p-6 text-center text-xs text-slate-500">
-              <AlertCircle className="h-8 w-8 text-slate-300 mb-2" />
-              <p className="font-semibold text-slate-700 dark:text-slate-300">
-                No health measurements recorded for {currentPatient?.name} in this timeframe.
-              </p>
-              <p className="text-[11px] text-slate-400 mt-1 max-w-sm">
-                When the patient or an authorized caregiver logs a measurement, it will appear here instantly without refreshing the page.
-              </p>
-            </div>
-          ) : (
-            <div className="h-64 w-full pt-2">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={history} margin={{ top: 10, right: 20, left: -10, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                  <XAxis
-                    dataKey="timeFormatted"
-                    stroke="#94a3b8"
-                    fontSize={11}
-                    tickLine={false}
-                  />
-                  <YAxis stroke="#94a3b8" fontSize={11} tickLine={false} />
-                  <Tooltip
-                    content={({ active, payload }) => {
-                      if (active && payload && payload.length) {
-                        const rec = payload[0].payload as MetricRecord;
-                        return (
-                          <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-xl text-xs space-y-1 dark:border-slate-800 dark:bg-slate-900">
-                            <div className="font-bold text-slate-900 dark:text-white">
-                              {rec.dateFormatted} â€¢ {rec.timeFormatted}
-                            </div>
-                            <div className="text-[11px] text-slate-500">Source: {rec.source}</div>
-                            {rec.heartRate && (
-                              <div className="text-rose-600 font-semibold">
-                                Heart Rate: {rec.heartRate} BPM
-                              </div>
-                            )}
-                            {rec.bloodGlucose && (
-                              <div className="text-amber-600 font-semibold">
-                                Glucose: {rec.bloodGlucose} mg/dL
-                              </div>
-                            )}
-                            {rec.bloodPressure && (
-                              <div className="text-teal-700 font-semibold">
-                                BP: {rec.bloodPressure} mmHg
-                              </div>
-                            )}
-                            {rec.temperature && (
-                              <div className="text-orange-600 font-semibold">
-                                Temp: {rec.temperature}Â°C
-                              </div>
-                            )}
-                            {rec.oxygenSaturation && (
-                              <div className="text-sky-600 font-semibold">
-                                SpO2: {rec.oxygenSaturation}%
-                              </div>
-                            )}
-                          </div>
-                        );
-                      }
-                      return null;
-                    }}
-                  />
-
-                  {activeChart === "heart" && (
-                    <Line
-                      type="monotone"
-                      dataKey="heartRate"
-                      stroke="#e11d48"
-                      strokeWidth={3}
-                      dot={{ r: 4, fill: "#e11d48" }}
-                      name="Heart Rate (BPM)"
-                      connectNulls
-                    />
-                  )}
-
-                  {activeChart === "glucose" && (
-                    <Line
-                      type="monotone"
-                      dataKey="bloodGlucose"
-                      stroke="#d97706"
-                      strokeWidth={3}
-                      dot={{ r: 4, fill: "#d97706" }}
-                      name="Blood Glucose (mg/dL)"
-                      connectNulls
-                    />
-                  )}
-
-                  {activeChart === "bp" && (
-                    <>
-                      <Line
-                        type="monotone"
-                        dataKey="systolic"
-                        stroke="#0f766e"
-                        strokeWidth={3}
-                        dot={{ r: 4, fill: "#0f766e" }}
-                        name="Systolic (mmHg)"
-                        connectNulls
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="diastolic"
-                        stroke="#0284c7"
-                        strokeWidth={2}
-                        strokeDasharray="4 4"
-                        dot={{ r: 3, fill: "#0284c7" }}
-                        name="Diastolic (mmHg)"
-                        connectNulls
-                      />
-                    </>
-                  )}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-
-        {/* Individual Measurement History Table */}
-        <div className="rounded-xl border border-slate-200 bg-white p-5 dark:border-slate-800 dark:bg-slate-900 space-y-3">
-          <div className="flex items-center justify-between">
-            <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center space-x-2">
-              <FileText className="h-4 w-4 text-teal-700" />
-              <span>Historical Measurement Records ({history.length})</span>
-            </h4>
-            <span className="text-[11px] text-slate-400">Chronological telemetry audit</span>
-          </div>
-
+        {/* History Table */}
+        <div className="mt-4 overflow-x-auto">
           {history.length === 0 ? (
-            <p className="text-xs text-slate-400 italic">No historical logs available for this period.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-100 text-slate-400 uppercase text-[10px] dark:border-slate-800">
-                    <th className="py-2 pr-3">Timestamp</th>
-                    <th className="py-2 px-2">Heart Rate</th>
-                    <th className="py-2 px-2">Glucose</th>
-                    <th className="py-2 px-2">Blood Pressure</th>
-                    <th className="py-2 px-2">Temp</th>
-                    <th className="py-2 px-2">SpO2</th>
-                    <th className="py-2 px-2">Weight</th>
-                    <th className="py-2 pl-2">Source</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {[...history].reverse().map((r) => (
-                    <tr key={r.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
-                      <td className="py-2.5 pr-3 font-medium text-slate-700 dark:text-slate-300">
-                        {r.dateFormatted} â€¢ {r.timeFormatted}
-                      </td>
-                      <td className="py-2.5 px-2 font-bold text-rose-600">
-                        {r.heartRate ? `${r.heartRate} BPM` : "--"}
-                      </td>
-                      <td className="py-2.5 px-2 font-bold text-amber-600">
-                        {r.bloodGlucose ? `${r.bloodGlucose} mg/dL` : "--"}
-                      </td>
-                      <td className="py-2.5 px-2 font-bold text-teal-700 dark:text-teal-400">
-                        {r.bloodPressure ? `${r.bloodPressure} mmHg` : "--"}
-                      </td>
-                      <td className="py-2.5 px-2 font-semibold text-slate-600 dark:text-slate-400">
-                        {r.temperature ? `${r.temperature}Â°C` : "--"}
-                      </td>
-                      <td className="py-2.5 px-2 font-semibold text-sky-600">
-                        {r.oxygenSaturation ? `${r.oxygenSaturation}%` : "--"}
-                      </td>
-                      <td className="py-2.5 px-2 font-semibold text-slate-600 dark:text-slate-400">
-                        {r.weight ? `${r.weight} kg` : "--"}
-                      </td>
-                      <td className="py-2.5 pl-2">
-                        <Badge variant="outline" className="text-[10px]">
-                          {r.source}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="py-12 text-center text-slate-500">
+              <Activity className="h-10 w-10 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
+              <p className="text-sm font-semibold">No vitals recorded for this timeframe</p>
+              <p className="text-xs text-slate-400 mt-1">Use "Record Reading" above to log blood sugar or blood pressure.</p>
             </div>
+          ) : (
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold border-b border-slate-200 dark:border-slate-700">
+                <tr>
+                  <th className="py-3 px-3">Date & Time</th>
+                  <th className="py-3 px-3">Blood Sugar</th>
+                  <th className="py-3 px-3">Blood Pressure</th>
+                  <th className="py-3 px-3">Recorded By</th>
+                  <th className="py-3 px-3">Notes</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {history.map((record) => (
+                  <tr key={record.id} className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40">
+                    <td className="py-3 px-3 font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+                      {record.dateFormatted} <span className="text-slate-400">{record.timeFormatted}</span>
+                    </td>
+                    <td className="py-3 px-3">
+                      {record.bloodGlucose !== null && record.bloodGlucose !== undefined ? (
+                        <div className="flex items-center space-x-1.5">
+                          <span className="font-bold text-slate-900 dark:text-white">{record.bloodGlucose} mg/dL</span>
+                          {record.sugarEvaluation && getSeverityBadge(record.sugarEvaluation.severity)}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">--</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3">
+                      {record.systolic && record.diastolic ? (
+                        <div className="flex items-center space-x-1.5">
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            {record.systolic}/{record.diastolic} mmHg
+                          </span>
+                          {record.bpEvaluation && getSeverityBadge(record.bpEvaluation.severity)}
+                        </div>
+                      ) : record.bloodPressure ? (
+                        <span className="font-bold text-slate-900 dark:text-white">{record.bloodPressure}</span>
+                      ) : (
+                        <span className="text-slate-400">--</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3 text-slate-600 dark:text-slate-400">
+                      {record.authorName || record.source}
+                    </td>
+                    <td className="py-3 px-3 text-slate-500 max-w-xs truncate">
+                      {record.notes || "--"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
+        </div>
 
-          <div className="pt-2 text-[11px] text-slate-400 border-t border-slate-100 dark:border-slate-800">
-            Clinical Safety Notice: Measurements are logged manually via CareNest. Not continuous biometric sensor hardware. Does not formulate medical diagnoses.
+        {/* Cursor Pagination Controls */}
+        <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500">
+          <span>Showing {history.length} records</span>
+          <div className="flex items-center space-x-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handlePrevPage}
+              disabled={cursorHistory.length === 0 || loading}
+              className="text-xs h-8 px-2.5 rounded-lg"
+            >
+              <ChevronLeft className="h-4 w-4 mr-1" />
+              Previous
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleNextPage}
+              disabled={!nextCursor || loading}
+              className="text-xs h-8 px-2.5 rounded-lg"
+            >
+              Next
+              <ChevronRight className="h-4 w-4 ml-1" />
+            </Button>
           </div>
         </div>
       </div>
+
+      {/* MODAL 1: RECORD READING */}
+      {showReadingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">
+              Record Patient Vitals
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Enter clinical observations for {currentPatient?.name}.
+            </p>
+
+            {readingError && (
+              <div className="mb-4 rounded-xl bg-rose-50 p-3 text-xs text-rose-700 border border-rose-200">
+                {readingError}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveReading} className="space-y-4">
+              <div>
+                <Label htmlFor="sugar" className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Blood Sugar (Glucose, mg/dL)
+                </Label>
+                <Input
+                  id="sugar"
+                  type="number"
+                  step="any"
+                  placeholder="e.g. 105"
+                  value={sugarInput}
+                  onChange={(e) => setSugarInput(e.target.value)}
+                  className="mt-1 text-sm"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="sys" className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Systolic BP (mmHg)
+                  </Label>
+                  <Input
+                    id="sys"
+                    type="number"
+                    placeholder="e.g. 120"
+                    value={systolicInput}
+                    onChange={(e) => setSystolicInput(e.target.value)}
+                    className="mt-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="dia" className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Diastolic BP (mmHg)
+                  </Label>
+                  <Input
+                    id="dia"
+                    type="number"
+                    placeholder="e.g. 80"
+                    value={diastolicInput}
+                    onChange={(e) => setDiastolicInput(e.target.value)}
+                    className="mt-1 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="readingNotes" className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                  Clinical Notes (Optional)
+                </Label>
+                <Textarea
+                  id="readingNotes"
+                  placeholder="Patient was relaxed, taken before morning dose..."
+                  value={readingNotes}
+                  onChange={(e) => setReadingNotes(e.target.value)}
+                  className="mt-1 text-xs"
+                  rows={2}
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end space-x-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowReadingModal(false)}
+                  disabled={savingReading}
+                  className="text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={savingReading}
+                  className="bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold"
+                >
+                  {savingReading ? "Saving..." : "Save Reading"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: ASSIGN MEDICATION */}
+      {showMedModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">
+              Assign Medication
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Add a new medication and daily intake times for {currentPatient?.name}.
+            </p>
+
+            {medError && (
+              <div className="mb-4 rounded-xl bg-rose-50 p-3 text-xs text-rose-700 border border-rose-200">
+                {medError}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveMedication} className="space-y-4">
+              <div>
+                <Label htmlFor="medName" className="text-xs font-bold">
+                  Medication Name *
+                </Label>
+                <Input
+                  id="medName"
+                  placeholder="e.g. Metformin or Lisinopril"
+                  value={medName}
+                  onChange={(e) => setMedName(e.target.value)}
+                  required
+                  className="mt-1 text-sm"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="medStrength" className="text-xs font-bold">
+                    Strength / Dose *
+                  </Label>
+                  <Input
+                    id="medStrength"
+                    placeholder="e.g. 500 mg"
+                    value={medStrength}
+                    onChange={(e) => setMedStrength(e.target.value)}
+                    required
+                    className="mt-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="medForm" className="text-xs font-bold">
+                    Form
+                  </Label>
+                  <select
+                    id="medForm"
+                    value={medForm}
+                    onChange={(e) => setMedForm(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                  >
+                    <option value="TABLET">Tablet</option>
+                    <option value="CAPSULE">Capsule</option>
+                    <option value="SYRUP">Syrup</option>
+                    <option value="INJECTION">Injection</option>
+                    <option value="DROPS">Drops</option>
+                    <option value="INHALER">Inhaler</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="medTimes" className="text-xs font-bold">
+                  Schedule Times (comma-separated 24h format) *
+                </Label>
+                <Input
+                  id="medTimes"
+                  placeholder="08:00, 20:00"
+                  value={medTimes}
+                  onChange={(e) => setMedTimes(e.target.value)}
+                  required
+                  className="mt-1 text-sm"
+                />
+                <span className="text-[11px] text-slate-400">Example: 08:00, 14:00, 20:00</span>
+              </div>
+
+              <div>
+                <Label htmlFor="medInst" className="text-xs font-bold">
+                  Instructions
+                </Label>
+                <Input
+                  id="medInst"
+                  placeholder="Take 1 tablet after food with water"
+                  value={medDosageInstructions}
+                  onChange={(e) => setMedDosageInstructions(e.target.value)}
+                  className="mt-1 text-sm"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end space-x-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowMedModal(false)}
+                  disabled={savingMed}
+                  className="text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={savingMed}
+                  className="bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold"
+                >
+                  {savingMed ? "Assigning..." : "Assign Medication"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 3: ASSIGN TASK */}
+      {showTaskModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+            <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-1">
+              Add Care Task
+            </h3>
+            <p className="text-xs text-slate-500 mb-4">
+              Create a new care responsibility for {currentPatient?.name}.
+            </p>
+
+            {taskError && (
+              <div className="mb-4 rounded-xl bg-rose-50 p-3 text-xs text-rose-700 border border-rose-200">
+                {taskError}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveTask} className="space-y-4">
+              <div>
+                <Label htmlFor="taskTitle" className="text-xs font-bold">
+                  Task Title *
+                </Label>
+                <Input
+                  id="taskTitle"
+                  placeholder="e.g. Check morning blood sugar or Assist with mobility"
+                  value={taskTitle}
+                  onChange={(e) => setTaskTitle(e.target.value)}
+                  required
+                  className="mt-1 text-sm"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="taskDesc" className="text-xs font-bold">
+                  Description (Optional)
+                </Label>
+                <Textarea
+                  id="taskDesc"
+                  placeholder="Clinical instructions or specific guidance..."
+                  value={taskDescription}
+                  onChange={(e) => setTaskDescription(e.target.value)}
+                  className="mt-1 text-xs"
+                  rows={2}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label htmlFor="taskDueDate" className="text-xs font-bold">
+                    Due Date
+                  </Label>
+                  <Input
+                    id="taskDueDate"
+                    type="date"
+                    value={taskDueDate}
+                    onChange={(e) => setTaskDueDate(e.target.value)}
+                    required
+                    className="mt-1 text-sm"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="taskPriority" className="text-xs font-bold">
+                    Priority
+                  </Label>
+                  <select
+                    id="taskPriority"
+                    value={taskPriority}
+                    onChange={(e) => setTaskPriority(e.target.value as any)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                  >
+                    <option value="LOW">Low</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HIGH">High</option>
+                    <option value="URGENT">Urgent</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end space-x-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setShowTaskModal(false)}
+                  disabled={savingTask}
+                  className="text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={savingTask}
+                  className="bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold"
+                >
+                  {savingTask ? "Adding..." : "Add Task"}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

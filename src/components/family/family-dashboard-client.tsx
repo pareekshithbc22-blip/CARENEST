@@ -28,6 +28,8 @@ import { AnalyticsCharts } from "./analytics-charts";
 import { AddAppointmentModal } from "./add-appointment-modal";
 import { InviteMemberModal } from "./invite-member-modal";
 import { AddElderlyProfileModal } from "./add-elderly-profile-modal";
+import { evaluateBloodSugar, evaluateBloodPressure } from "@/lib/config";
+import { useDashboardPolling } from "@/hooks/use-dashboard-polling";
 
 export interface ManagedSeniorSummary {
   id: string;
@@ -127,9 +129,42 @@ export function FamilyDashboardClient({
     }
   }, []);
 
+  const [todayDoses, setTodayDoses] = React.useState<any[]>([]);
+  const [loadingTodayDoses, setLoadingTodayDoses] = React.useState(false);
+
+  const loadTodayDoses = React.useCallback(async (pid: string) => {
+    if (!pid) return;
+    setLoadingTodayDoses(true);
+    try {
+      const res = await fetch(`/api/doses?profileId=${encodeURIComponent(pid)}&filter=today`);
+      if (res.ok) {
+        const data = await res.json();
+        setTodayDoses(data.doses || []);
+      }
+    } catch {
+      // quiet fail
+    } finally {
+      setLoadingTodayDoses(false);
+    }
+  }, []);
+
+  // Automatic Polling for Family Role
+  const { lastUpdated, isRefreshing, refreshNow } = useDashboardPolling({
+    role: "family",
+    onUpdate: () => {
+      if (profile?.id) {
+        loadTodayDoses(profile.id);
+        loadCaretakerRequests();
+      }
+    },
+  });
+
   React.useEffect(() => {
     loadCaretakerRequests();
-  }, [loadCaretakerRequests]);
+    if (profile?.id) {
+      loadTodayDoses(profile.id);
+    }
+  }, [loadCaretakerRequests, loadTodayDoses, profile?.id]);
 
   const handleRespondCaretakerRequest = async (
     requestId: string,
@@ -341,6 +376,18 @@ export function FamilyDashboardClient({
               <p className="text-xs font-medium text-slate-600 mt-1">
                 {adminUser.email} • Overseeing senior health records, coordinating appointments, and reviewing medication adherence.
               </p>
+              <div className="flex items-center space-x-2 mt-2 text-[11px] text-slate-500">
+                <span className={`inline-block h-2 w-2 rounded-full ${isRefreshing ? "bg-amber-500 animate-ping" : "bg-emerald-500"}`} />
+                <span>Last updated: {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+                <button
+                  type="button"
+                  onClick={() => refreshNow()}
+                  disabled={isRefreshing}
+                  className="text-teal-700 hover:underline font-bold ml-1"
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -918,6 +965,7 @@ export function FamilyDashboardClient({
                   <div className="space-y-3">
                     {doses.map((dose) => {
                       const isTaken = dose.status === "TAKEN";
+                      const isSkipped = dose.status === "SKIPPED";
                       const isMissed = dose.status === "MISSED" || dose.status === "UNCONFIRMED";
                       const timeStr = new Date(dose.scheduledAt).toLocaleTimeString([], {
                         hour: "2-digit",
@@ -930,6 +978,8 @@ export function FamilyDashboardClient({
                           className={`rounded-2xl border p-4 transition-all shadow-2xs ${
                             isTaken
                               ? "border-emerald-200 bg-emerald-50/40"
+                              : isSkipped
+                              ? "border-slate-200 bg-slate-50/70"
                               : isMissed
                               ? "border-amber-300 bg-amber-50/60"
                               : "border-slate-200 bg-white"
@@ -942,7 +992,9 @@ export function FamilyDashboardClient({
                                   {timeStr}
                                 </span>
                                 {isTaken && <Badge variant="success" className="text-[10px]">Taken</Badge>}
-                                {isMissed && <Badge variant="warning" className="text-[10px]">Attention Needed</Badge>}
+                                {isSkipped && <Badge className="bg-slate-200 text-slate-700 text-[10px]">Skipped</Badge>}
+                                {isMissed && <Badge variant="warning" className="text-[10px]">Missed</Badge>}
+                                {!isTaken && !isSkipped && !isMissed && <Badge variant="outline" className="text-[10px]">Pending</Badge>}
                               </div>
                               <h4 className="text-sm font-bold text-slate-900 pt-0.5">
                                 {dose.medication.name} ({dose.medication.strength})
@@ -950,9 +1002,16 @@ export function FamilyDashboardClient({
                               <p className="text-xs text-slate-600">
                                 {dose.medication.dosageInstructions}
                               </p>
+                              {dose.confirmedAt && (
+                                <p className="text-[11px] text-slate-500 pt-0.5 font-medium">
+                                  {isTaken ? "Confirmed taken at " : isSkipped ? "Marked skipped at " : "Recorded at "}
+                                  {new Date(dose.confirmedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                  {dose.confirmationNotes ? ` (${dose.confirmationNotes})` : ""}
+                                </p>
+                              )}
                             </div>
 
-                            {!isTaken && (
+                            {!isTaken && !isSkipped && (
                               <Button
                                 size="xs"
                                 variant="outline"
@@ -1035,47 +1094,76 @@ export function FamilyDashboardClient({
               </p>
             </div>
 
-            {/* Latest Vitals Overview Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-              {/* Heart Rate */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Heart Rate / Pulse
-                </span>
-                <div className="mt-2 flex items-baseline space-x-1">
-                  <span className="text-2xl font-black text-slate-900">
-                    {latestVital?.heartRate ?? "--"}
-                  </span>
-                  <span className="text-xs font-bold text-slate-500">BPM</span>
-                </div>
-                <span className="text-[10px] text-teal-700 font-semibold block mt-1">
-                  {latestVital?.heartRate ? "Normal resting" : "No recent reading"}
-                </span>
-              </div>
-
+            {/* Latest Vitals: Blood Sugar & Blood Pressure Only */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* Blood Glucose */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Blood Glucose
-                </span>
-                <div className="mt-2 flex items-baseline space-x-1">
-                  <span className="text-2xl font-black text-slate-900">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
+                    Blood Sugar (Glucose)
+                  </span>
+                  {latestVital?.bloodGlucose !== null && latestVital?.bloodGlucose !== undefined ? (
+                    (() => {
+                      const evalResult = evaluateBloodSugar(latestVital.bloodGlucose);
+                      return (
+                        <Badge
+                          className={`text-xs font-bold ${
+                            evalResult.severity === "CRITICAL"
+                              ? "bg-rose-100 text-rose-800 border-rose-300"
+                              : evalResult.severity === "WARNING"
+                              ? "bg-amber-100 text-amber-800 border-amber-300"
+                              : "bg-emerald-100 text-emerald-800 border-emerald-300"
+                          }`}
+                        >
+                          {evalResult.label}
+                        </Badge>
+                      );
+                    })()
+                  ) : (
+                    <Badge variant="outline" className="text-xs">No reading</Badge>
+                  )}
+                </div>
+                <div className="mt-4 flex items-baseline space-x-1">
+                  <span className="text-3xl font-black text-slate-900">
                     {latestVital?.bloodGlucose ?? "--"}
                   </span>
                   <span className="text-xs font-bold text-slate-500">mg/dL</span>
                 </div>
-                <span className="text-[10px] text-teal-700 font-semibold block mt-1">
-                  {latestVital?.bloodGlucose ? "Fasting/Post-meal" : "No recent reading"}
-                </span>
+                <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                  <span>Target: 70 - 140 mg/dL</span>
+                  <span>{latestVital ? new Date(latestVital.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}</span>
+                </div>
               </div>
 
               {/* Blood Pressure */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Blood Pressure
-                </span>
-                <div className="mt-2 flex items-baseline space-x-1">
-                  <span className="text-2xl font-black text-slate-900">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
+                    Blood Pressure
+                  </span>
+                  {latestVital?.systolic && latestVital?.diastolic ? (
+                    (() => {
+                      const evalResult = evaluateBloodPressure(latestVital.systolic, latestVital.diastolic);
+                      return (
+                        <Badge
+                          className={`text-xs font-bold ${
+                            evalResult.severity === "CRITICAL"
+                              ? "bg-rose-100 text-rose-800 border-rose-300"
+                              : evalResult.severity === "WARNING"
+                              ? "bg-amber-100 text-amber-800 border-amber-300"
+                              : "bg-emerald-100 text-emerald-800 border-emerald-300"
+                          }`}
+                        >
+                          {evalResult.label}
+                        </Badge>
+                      );
+                    })()
+                  ) : (
+                    <Badge variant="outline" className="text-xs">No reading</Badge>
+                  )}
+                </div>
+                <div className="mt-4 flex items-baseline space-x-1">
+                  <span className="text-3xl font-black text-slate-900">
                     {latestVital?.bloodPressure ||
                       (latestVital?.systolic && latestVital?.diastolic
                         ? `${latestVital.systolic}/${latestVital.diastolic}`
@@ -1083,68 +1171,24 @@ export function FamilyDashboardClient({
                   </span>
                   <span className="text-xs font-bold text-slate-500">mmHg</span>
                 </div>
-                <span className="text-[10px] text-teal-700 font-semibold block mt-1">
-                  {latestVital?.bloodPressure ? "Clinical reading" : "No recent reading"}
-                </span>
-              </div>
-
-              {/* Temperature */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Body Temp
-                </span>
-                <div className="mt-2 flex items-baseline space-x-1">
-                  <span className="text-2xl font-black text-slate-900">
-                    {latestVital?.temperature ?? "--"}
-                  </span>
-                  <span className="text-xs font-bold text-slate-500">°C</span>
+                <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+                  <span>Target: 90-120 / 60-80 mmHg</span>
+                  <span>{latestVital ? new Date(latestVital.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}</span>
                 </div>
-                <span className="text-[10px] text-teal-700 font-semibold block mt-1">
-                  {latestVital?.temperature ? "Normal range" : "No recent reading"}
-                </span>
-              </div>
-
-              {/* SpO2 */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Oxygen (SpO2)
-                </span>
-                <div className="mt-2 flex items-baseline space-x-1">
-                  <span className="text-2xl font-black text-slate-900">
-                    {latestVital?.oxygenSaturation ?? "--"}
-                  </span>
-                  <span className="text-xs font-bold text-slate-500">%</span>
-                </div>
-                <span className="text-[10px] text-teal-700 font-semibold block mt-1">
-                  {latestVital?.oxygenSaturation ? "Healthy saturation" : "No recent reading"}
-                </span>
-              </div>
-
-              {/* Weight */}
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-2xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Weight
-                </span>
-                <div className="mt-2 flex items-baseline space-x-1">
-                  <span className="text-2xl font-black text-slate-900">
-                    {latestVital?.weight ?? "--"}
-                  </span>
-                  <span className="text-xs font-bold text-slate-500">kg</span>
-                </div>
-                <span className="text-[10px] text-teal-700 font-semibold block mt-1">
-                  {latestVital?.weight ? "Stable baseline" : "No recent reading"}
-                </span>
               </div>
             </div>
 
             {/* Vitals History Table */}
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs space-y-4">
               <div className="flex items-center justify-between">
-                <h4 className="text-base font-black text-slate-900">
-                  Measurement History Log
-                </h4>
-                <span className="text-xs text-slate-500">
-                  Synchronized live with PostgreSQL
+                <div>
+                  <h4 className="text-base font-black text-slate-900">
+                    Vitals History Log
+                  </h4>
+                  <p className="text-xs text-slate-500">Sequential clinical records for blood sugar and blood pressure.</p>
+                </div>
+                <span className="text-xs text-slate-400">
+                  {vitalsHistory.length} entries
                 </span>
               </div>
 
@@ -1158,46 +1202,61 @@ export function FamilyDashboardClient({
                     <thead>
                       <tr className="border-b border-slate-100 text-slate-400 uppercase text-[10px] font-bold tracking-wider">
                         <th className="py-2.5 font-bold">Timestamp</th>
-                        <th className="py-2.5 font-bold">Heart Rate</th>
                         <th className="py-2.5 font-bold">Blood Glucose</th>
                         <th className="py-2.5 font-bold">Blood Pressure</th>
-                        <th className="py-2.5 font-bold">Temp</th>
-                        <th className="py-2.5 font-bold">SpO2</th>
                         <th className="py-2.5 font-bold">Clinical Notes</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-medium">
-                      {vitalsHistory.map((item) => (
-                        <tr key={item.id} className="hover:bg-slate-50/60">
-                          <td className="py-3 text-slate-700 font-mono text-[11px]">
-                            {new Date(item.createdAt).toLocaleDateString([], {
-                              month: "short",
-                              day: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </td>
-                          <td className="py-3 font-bold text-slate-900">
-                            {item.heartRate ? `${item.heartRate} BPM` : "--"}
-                          </td>
-                          <td className="py-3 font-bold text-slate-900">
-                            {item.bloodGlucose ? `${item.bloodGlucose} mg/dL` : "--"}
-                          </td>
-                          <td className="py-3 font-bold text-slate-900">
-                            {item.bloodPressure ||
-                              (item.systolic && item.diastolic ? `${item.systolic}/${item.diastolic}` : "--")}
-                          </td>
-                          <td className="py-3 text-slate-700">
-                            {item.temperature ? `${item.temperature}°C` : "--"}
-                          </td>
-                          <td className="py-3 text-slate-700">
-                            {item.oxygenSaturation ? `${item.oxygenSaturation}%` : "--"}
-                          </td>
-                          <td className="py-3 text-slate-600 max-w-xs truncate">
-                            {item.notes || "Self-reported measurement"}
-                          </td>
-                        </tr>
-                      ))}
+                      {vitalsHistory.map((item) => {
+                        const sugarEval = evaluateBloodSugar(item.bloodGlucose);
+                        const bpEval = evaluateBloodPressure(item.systolic, item.diastolic);
+                        return (
+                          <tr key={item.id} className="hover:bg-slate-50/60">
+                            <td className="py-3 text-slate-700 font-mono text-[11px]">
+                              {new Date(item.createdAt).toLocaleDateString([], {
+                                month: "short",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </td>
+                            <td className="py-3">
+                              {item.bloodGlucose !== null && item.bloodGlucose !== undefined ? (
+                                <div className="flex items-center space-x-1.5">
+                                  <span className="font-bold text-slate-900">{item.bloodGlucose} mg/dL</span>
+                                  {sugarEval.isAbnormal && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                                      {sugarEval.label}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-slate-400">--</span>
+                              )}
+                            </td>
+                            <td className="py-3">
+                              {item.bloodPressure || (item.systolic && item.diastolic) ? (
+                                <div className="flex items-center space-x-1.5">
+                                  <span className="font-bold text-slate-900">
+                                    {item.bloodPressure || `${item.systolic}/${item.diastolic} mmHg`}
+                                  </span>
+                                  {bpEval.isAbnormal && (
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                                      {bpEval.label}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-slate-400">--</span>
+                              )}
+                            </td>
+                            <td className="py-3 text-slate-600 max-w-xs truncate">
+                              {item.notes || "Self-reported measurement"}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1277,6 +1336,26 @@ export function FamilyDashboardClient({
                           <span className="text-slate-700">{med.purpose}</span>
                         </div>
                       )}
+
+                      {/* Scheduled Intake Times */}
+                      {med.schedules && med.schedules.length > 0 && med.schedules[0].timesOfDay && (
+                        <div className="text-xs">
+                          <span className="font-semibold text-slate-500 block">Scheduled Intake Times:</span>
+                          <span className="font-bold text-teal-800">
+                            {med.schedules[0].timesOfDay.join(", ")}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Assigned By Caretaker and When */}
+                      <div className="rounded-xl bg-slate-50 p-2.5 border border-slate-100 text-[11px] text-slate-600">
+                        <span className="font-bold text-slate-800 block">Clinical Assignment:</span>
+                        <span>
+                          {med.assignedBy?.name
+                            ? `Assigned by ${med.assignedBy.name} on ${new Date(med.assignedAt || med.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+                            : `Registered on ${new Date(med.createdAt).toLocaleDateString([], { month: "short", day: "numeric" })}`}
+                        </span>
+                      </div>
 
                       <div className="grid grid-cols-2 gap-2 text-[11px] pt-2 border-t border-slate-100 text-slate-500">
                         <div>

@@ -61,6 +61,7 @@ export const authOptions: AuthOptions = {
           response_type: "code",
         },
       },
+      checks: ["pkce"],
       allowDangerousEmailAccountLinking: true,
     }),
     CredentialsProvider({
@@ -218,7 +219,7 @@ export const authOptions: AuthOptions = {
           return null;
         }
 
-        // Check email verification status
+        // An email/password account that is not verified cannot sign in
         if (!user.isEmailVerified) {
           throw new Error("EMAIL_NOT_VERIFIED");
         }
@@ -243,10 +244,15 @@ export const authOptions: AuthOptions = {
     }),
   ],
   callbacks: {
-    async signIn({ user, account }) {
+    async signIn({ user, account, profile }) {
       if (account?.provider === "google") {
         const email = user.email?.toLowerCase().trim();
         if (!email) return false;
+
+        const googleEmailVerified = (profile as any)?.email_verified ?? true;
+        if (!googleEmailVerified) {
+          return "/login?error=GoogleEmailUnverified";
+        }
 
         let dbUser = await prisma.user.findUnique({
           where: { email },
@@ -283,14 +289,20 @@ export const authOptions: AuthOptions = {
             },
           });
         } else {
-          if (!dbUser.googleId) {
-            await prisma.user.update({
+          if (!dbUser.isActive) {
+            return "/login?error=AccountDeactivated";
+          }
+
+          // If a password account exists with the same email, link Google login to it when Google reports the email verified, and sign the user in.
+          if (!dbUser.googleId || dbUser.googleId !== account.providerAccountId) {
+            dbUser = await prisma.user.update({
               where: { id: dbUser.id },
               data: {
                 googleId: account.providerAccountId,
                 isEmailVerified: true,
                 emailVerified: dbUser.emailVerified || new Date(),
               },
+              include: { caretakerProfile: true },
             });
           }
         }
@@ -310,7 +322,7 @@ export const authOptions: AuthOptions = {
       }
       return true;
     },
-    async jwt({ token, user, trigger, session }) {
+    async jwt({ token, user, trigger, session, account }) {
       if (user) {
         token.id = user.id;
         token.role = user.role;
@@ -319,8 +331,31 @@ export const authOptions: AuthOptions = {
         token.twoFactorEnabled = user.twoFactorEnabled ?? false;
         token.twoFactorVerified = user.twoFactorVerified ?? false;
         token.twoFactorPendingSetup = user.twoFactorPendingSetup ?? false;
-        token.isEmailVerified = user.isEmailVerified ?? false;
+        token.isEmailVerified = true;
         token.needsProfileCompletion = user.needsProfileCompletion ?? false;
+      }
+
+      if (token.email && (account?.provider === "google" || !token.role || (typeof token.id === "string" && token.id.length > 36))) {
+        try {
+          const dbUser = await prisma.user.findUnique({
+            where: { email: (token.email as string).toLowerCase().trim() },
+            include: { caretakerProfile: true },
+          });
+          if (dbUser) {
+            token.id = dbUser.id;
+            token.role = dbUser.role;
+            token.avatarUrl = dbUser.avatarUrl || (token.picture as string | null);
+            token.phoneNumber = dbUser.phoneNumber;
+            token.twoFactorEnabled = dbUser.twoFactorEnabled;
+            token.twoFactorVerified = dbUser.role === "SENIOR";
+            token.twoFactorPendingSetup = dbUser.role !== "SENIOR" && !dbUser.twoFactorEnabled;
+            token.isEmailVerified = true;
+            token.needsProfileCompletion =
+              (dbUser.role === "CARETAKER" && !dbUser.caretakerProfile);
+          }
+        } catch (e) {
+          console.error("[JWT Callback Google User Lookup Error]:", e);
+        }
       }
 
       if (trigger === "update" && session) {
@@ -342,6 +377,11 @@ export const authOptions: AuthOptions = {
       }
 
       return token;
+    },
+    async redirect({ url, baseUrl }) {
+      if (url.startsWith("/")) return `${baseUrl}${url}`;
+      if (new URL(url).origin === baseUrl) return url;
+      return baseUrl;
     },
     async session({ session, token }) {
       if (session.user) {

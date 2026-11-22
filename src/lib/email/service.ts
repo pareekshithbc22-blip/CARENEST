@@ -537,6 +537,45 @@ export async function sendEscalationAlertEmail({
 
 export const sendCaregiverEscalationEmail = sendEscalationAlertEmail;
 
+export async function sendAbnormalReadingAlertEmail({
+  to,
+  seniorName,
+  vitalType,
+  readingValue,
+  severity,
+  message,
+}: {
+  to: string;
+  seniorName: string;
+  vitalType: string;
+  readingValue: string;
+  severity: "WARNING" | "CRITICAL";
+  message: string;
+}): Promise<EmailResult> {
+  const isCritical = severity === "CRITICAL";
+  const subject = `${isCritical ? "🚨 CRITICAL" : "⚠️ WARNING"}: Abnormal ${vitalType} for ${seniorName}`;
+  const html = generateBaseEmailWrapper(
+    subject,
+    `
+      <span class="badge ${isCritical ? "badge-urgent" : "badge-escalation"}">${severity} Vital Alert</span>
+      <h2 style="margin-top: 0; font-size: 20px; color: ${isCritical ? "#991b1b" : "#b45309"};">Clinical Reading Notification</h2>
+      <p style="color: #334155;">An abnormal reading was recorded for <strong>${seniorName}</strong>.</p>
+      
+      <div class="info-card" style="border-left: 4px solid ${isCritical ? "#dc2626" : "#f59e0b"};">
+        <div class="info-row"><span class="info-label">Patient:</span><span class="info-value">${seniorName}</span></div>
+        <div class="info-row"><span class="info-label">${vitalType}:</span><span class="info-value">${readingValue}</span></div>
+        <div class="info-row"><span class="info-label">Evaluation:</span><span class="info-value">${message}</span></div>
+        <div class="info-row"><span class="info-label">Clinical Notice:</span><span class="info-value">Default alert thresholds, not medical advice.</span></div>
+      </div>
+
+      <p style="color: #334155; font-size: 14px;">Please review the patient's vitals on CareNest immediately.</p>
+      <a href="${getAppUrl()}/login" class="btn" style="background-color: ${isCritical ? "#b91c1c" : "#0d9488"};">View Patient Dashboard</a>
+    `
+  );
+
+  return sendEmail({ to, subject, html, type: "ESCALATION" });
+}
+
 /**
  * Appointment reminder email template
  */

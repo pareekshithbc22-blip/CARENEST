@@ -14,6 +14,7 @@ export async function requireAuth() {
   if (user.role !== "SENIOR" && !user.isEmailVerified) {
     throw new Error("EMAIL_VERIFICATION_REQUIRED");
   }
+  // Compulsory 2FA verification for Family and Caretakers
   if ((user.role === "FAMILY" || user.role === "CARETAKER") && user.twoFactorVerified === false) {
     throw new Error("TWO_FACTOR_REQUIRED");
   }

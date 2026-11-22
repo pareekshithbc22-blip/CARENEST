@@ -33,6 +33,9 @@ export async function GET(req: Request) {
         schedules: {
           where: { isActive: true },
         },
+        assignedBy: {
+          select: { id: true, name: true, role: true },
+        },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -95,6 +98,8 @@ export async function POST(req: Request) {
           prescribingClinic: data.prescribingClinic,
           rxNumber: data.rxNumber,
           purpose: data.purpose,
+          assignedById: user.id,
+          assignedAt: new Date(),
         },
       });
 

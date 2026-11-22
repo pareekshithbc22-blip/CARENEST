@@ -19,6 +19,7 @@ import {
   KeyRound,
   RefreshCw,
   ArrowRight,
+  ArrowLeft,
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,9 @@ import { Label } from "@/components/ui/label";
 
 export default function RegisterPage() {
   const router = useRouter();
+
+  // Current registration step
+  const [step, setStep] = React.useState<"form" | "otp">("form");
 
   // Account Form State
   const [name, setName] = React.useState("");
@@ -50,24 +54,44 @@ export default function RegisterPage() {
   const [googleLoading, setGoogleLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  // Success state after registration
-  const [registrationSuccess, setRegistrationSuccess] = React.useState(false);
+  // OTP State
   const [registeredEmail, setRegisteredEmail] = React.useState("");
+  const [otp, setOtp] = React.useState(["", "", "", "", "", ""]);
+  const inputRefs = React.useRef<(HTMLInputElement | null)[]>([]);
+  const [cooldown, setCooldown] = React.useState(0);
   const [resending, setResending] = React.useState(false);
-  const [resendNotice, setResendNotice] = React.useState<string | null>(null);
-  const [cooldownSeconds, setCooldownSeconds] = React.useState(0);
+  const [verifying, setVerifying] = React.useState(false);
+  const [verifyingStage, setVerifyingStage] = React.useState<string | null>(null);
+  const [otpSentNotice, setOtpSentNotice] = React.useState<string | null>(null);
+  const [devNotice, setDevNotice] = React.useState<string | null>(null);
 
   // Phone validation helper
   const isPhoneValid = (phone: string) => /^\+?[0-9\s\-()]{7,20}$/.test(phone.trim());
 
+  // URL query check on mount (e.g. redirected from login to verify OTP)
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const urlEmail = params.get("email");
+      const urlStep = params.get("step");
+      if (urlEmail) {
+        setEmail(urlEmail);
+        setRegisteredEmail(urlEmail);
+      }
+      if (urlStep === "otp" && urlEmail) {
+        setStep("otp");
+      }
+    }
+  }, []);
+
   // Cooldown countdown timer
   React.useEffect(() => {
-    if (cooldownSeconds <= 0) return;
+    if (cooldown <= 0) return;
     const interval = setInterval(() => {
-      setCooldownSeconds((prev) => Math.max(0, prev - 1));
+      setCooldown((prev) => Math.max(0, prev - 1));
     }, 1000);
     return () => clearInterval(interval);
-  }, [cooldownSeconds]);
+  }, [cooldown]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setError(null);
@@ -94,7 +118,6 @@ export default function RegisterPage() {
     setError(null);
 
     try {
-      // Check if Google OAuth credentials are configured
       const statusRes = await fetch("/api/auth/google/status");
       const statusJson = await statusRes.json().catch(() => ({ configured: false }));
 
@@ -115,7 +138,7 @@ export default function RegisterPage() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -193,7 +216,7 @@ export default function RegisterPage() {
       }
 
       // Step B: Submit completed registration payload
-      setLoadingStage("Creating account & sending verification email...");
+      setLoadingStage("Creating account & sending verification code...");
       const regRes = await fetch("/api/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -212,10 +235,12 @@ export default function RegisterPage() {
         throw new Error(regData.error || "Registration completion failed.");
       }
 
-      // Step C: Switch to success screen prompting user to verify their email
+      // Step C: Switch to OTP step
       setRegisteredEmail(email.trim());
-      setRegistrationSuccess(true);
-      setCooldownSeconds(60);
+      setCooldown(regData.cooldownSeconds || 60);
+      setDevNotice(regData.devNotice || null);
+      setOtpSentNotice(`Verification code sent to ${email.trim()}.`);
+      setStep("otp");
     } catch (err: any) {
       setError(err.message || "Failed to register account.");
     } finally {
@@ -224,15 +249,48 @@ export default function RegisterPage() {
     }
   };
 
-  const handleResend = async () => {
-    if (cooldownSeconds > 0 || resending || !registeredEmail) return;
+  const handleOtpChange = (index: number, val: string) => {
+    const cleaned = val.replace(/\D/g, "");
+    if (!cleaned && val !== "") return;
 
+    const newOtp = [...otp];
+    newOtp[index] = cleaned.slice(-1);
+    setOtp(newOtp);
+    setError(null);
+
+    if (cleaned && index < 5) {
+      inputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Backspace" && !otp[index] && index > 0) {
+      inputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+    if (!pasted) return;
+
+    const newOtp = [...otp];
+    for (let i = 0; i < pasted.length; i++) {
+      newOtp[i] = pasted[i];
+    }
+    setOtp(newOtp);
+    const nextIdx = Math.min(pasted.length, 5);
+    inputRefs.current[nextIdx]?.focus();
+  };
+
+  const handleResendOtp = async () => {
+    if (cooldown > 0 || resending) return;
     setResending(true);
     setError(null);
-    setResendNotice(null);
+    setOtpSentNotice(null);
 
     try {
-      const res = await fetch("/api/auth/resend-verification", {
+      const res = await fetch("/api/auth/otp/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: registeredEmail }),
@@ -240,15 +298,66 @@ export default function RegisterPage() {
 
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Failed to resend verification email.");
+        setError(data.error || "We could not send the email. Please try again.");
+        if (data.cooldownSeconds) setCooldown(data.cooldownSeconds);
       } else {
-        setResendNotice("A new verification link has been sent to your email.");
-        setCooldownSeconds(60);
+        setOtpSentNotice(`Verification code sent to ${registeredEmail}.`);
+        if (data.devNotice) setDevNotice(data.devNotice);
+        setCooldown(data.cooldownSeconds || 60);
       }
-    } catch (err: any) {
-      setError(err.message || "Network error. Please try again.");
+    } catch {
+      setError("We could not send the email. Please try again.");
     } finally {
       setResending(false);
+    }
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+
+    const enteredCode = otp.join("");
+    if (enteredCode.length !== 6) {
+      setError("Please enter the complete 6-digit verification code.");
+      return;
+    }
+
+    setVerifying(true);
+    setVerifyingStage("Verifying code...");
+
+    try {
+      const res = await fetch("/api/auth/otp/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: registeredEmail,
+          otp: enteredCode,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Verification failed. Please check the code and try again.");
+      }
+
+      // Email verified! Sign in and forward to compulsory 2FA setup
+      setVerifyingStage("Email verified! Signing you in...");
+      const signInRes = await signIn("credentials", {
+        email: registeredEmail,
+        password,
+        redirect: false,
+      });
+
+      if (signInRes?.error) {
+        router.push("/login?callbackUrl=/auth/2fa/setup");
+      } else {
+        router.push("/auth/2fa/setup");
+      }
+      router.refresh();
+    } catch (err: any) {
+      setError(err.message || "Failed to verify code.");
+      setVerifying(false);
+      setVerifyingStage(null);
     }
   };
 
@@ -264,17 +373,69 @@ export default function RegisterPage() {
           </span>
         </Link>
         <h2 className="mt-4 text-2xl font-black text-slate-900 tracking-tight">
-          {registrationSuccess ? "Verify Your Email" : "Create Your Care Account"}
+          {step === "otp" ? "Verify Your Email Address" : "Create Your Care Account"}
         </h2>
         <p className="mt-1 text-xs text-slate-500">
-          {registrationSuccess
-            ? "Your account has been created. Please confirm your email address to continue."
+          {step === "otp"
+            ? "Enter the 6-digit verification code sent to your email to activate your account."
             : "Connect your family, organize prescriptions, and support elderly independence with enterprise-grade security."}
         </p>
       </div>
 
-      <div className={`mt-8 sm:mx-auto sm:w-full ${role === "CARETAKER" && !registrationSuccess ? "sm:max-w-xl" : "sm:max-w-md"}`}>
+      <div
+        className={`mt-8 sm:mx-auto sm:w-full ${
+          role === "CARETAKER" && step === "form" ? "sm:max-w-xl" : "sm:max-w-md"
+        }`}
+      >
         <div className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-8 shadow-xl">
+          {/* 3-Step Progress Indicator */}
+          <div className="mb-6 flex items-center justify-between text-xs font-semibold">
+            <div
+              className={`flex items-center gap-1.5 ${
+                step === "form" ? "text-teal-800" : "text-teal-700 font-bold"
+              }`}
+            >
+              <span
+                className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ${
+                  step === "form" ? "bg-teal-700 text-white" : "bg-teal-100 text-teal-800"
+                }`}
+              >
+                {step !== "form" ? "✓" : "1"}
+              </span>
+              <span className={step === "form" ? "font-bold text-slate-900" : "text-teal-800"}>
+                Create account
+              </span>
+            </div>
+
+            <div className="h-0.5 flex-1 mx-2 bg-slate-200" />
+
+            <div
+              className={`flex items-center gap-1.5 ${
+                step === "otp" ? "text-teal-800" : "text-slate-400"
+              }`}
+            >
+              <span
+                className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ${
+                  step === "otp" ? "bg-teal-700 text-white" : "border border-slate-300 text-slate-400"
+                }`}
+              >
+                2
+              </span>
+              <span className={step === "otp" ? "font-bold text-slate-900" : ""}>
+                Verify email
+              </span>
+            </div>
+
+            <div className="h-0.5 flex-1 mx-2 bg-slate-200" />
+
+            <div className="flex items-center gap-1.5 text-slate-400">
+              <span className="flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 text-[11px] font-bold text-slate-400">
+                3
+              </span>
+              <span>Set up authenticator</span>
+            </div>
+          </div>
+
           {error && (
             <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-semibold text-rose-800 flex items-start gap-2">
               <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 mt-0.5" />
@@ -282,81 +443,123 @@ export default function RegisterPage() {
             </div>
           )}
 
-          {registrationSuccess ? (
-            /* SUCCESS STATE AFTER CLICKING CREATE ACCOUNT */
-            <div className="py-4 space-y-5 text-center">
-              <div className="h-16 w-16 mx-auto rounded-2xl bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-700 shadow-sm">
-                <CheckCircle2 className="h-8 w-8 text-teal-700" />
-              </div>
-
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">
-                  Account created. Please check your email to verify.
-                </h3>
-                <p className="mt-2 text-xs text-slate-600 leading-relaxed">
-                  We have dispatched a verification link to:
-                  <br />
-                  <strong className="text-slate-900 font-semibold">{registeredEmail}</strong>
-                </p>
-              </div>
-
-              <div className="rounded-xl bg-teal-50/70 border border-teal-200 p-3 text-left text-xs text-teal-900 space-y-1.5">
-                <div className="flex items-center gap-1.5 font-bold text-teal-950">
-                  <Mail className="h-4 w-4 text-teal-700" />
-                  <span>Next Step:</span>
+          {step === "otp" ? (
+            /* STEP 2: 6-DIGIT EMAIL OTP VERIFICATION STEP */
+            <div className="space-y-5">
+              <div className="text-center space-y-1">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-teal-50 border border-teal-200 text-teal-700">
+                  <Mail className="h-6 w-6" />
                 </div>
-                <p className="text-[11px] text-teal-800 leading-relaxed">
-                  Click the verification link in your inbox. You will be automatically logged in and guided to set up your mandatory Two-Factor Authentication (2FA).
+                <h3 className="text-base font-bold text-slate-900 mt-2">Check Your Email</h3>
+                <p className="text-xs text-slate-600">
+                  We dispatched a 6-digit code to{" "}
+                  <strong className="text-slate-900 font-semibold">{registeredEmail}</strong>.
                 </p>
               </div>
 
-              {resendNotice && (
-                <div className="p-2.5 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 text-xs font-semibold flex items-center justify-center gap-2">
+              {otpSentNotice && (
+                <div className="p-2.5 rounded-xl bg-teal-50 border border-teal-200 text-teal-800 text-xs font-semibold flex items-center justify-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-teal-600 shrink-0" />
-                  <span>{resendNotice}</span>
+                  <span>{otpSentNotice}</span>
                 </div>
               )}
 
-              <div className="border-t border-slate-100 pt-4 space-y-3">
-                <p className="text-xs text-slate-500">
-                  Did not receive the email? Check your spam folder or request a new link:
-                </p>
+              {devNotice && (
+                <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium space-y-1">
+                  <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                    <span>Developer Note:</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-amber-900">{devNotice}</p>
+                </div>
+              )}
+
+              <form onSubmit={handleVerifyOtp} className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="block text-center text-xs font-bold text-slate-700">
+                    Enter 6-Digit Verification Code
+                  </Label>
+                  <div className="flex justify-center gap-2 sm:gap-2.5" onPaste={handleOtpPaste}>
+                    {otp.map((digit, idx) => (
+                      <input
+                        key={idx}
+                        ref={(el) => {
+                          inputRefs.current[idx] = el;
+                        }}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="\d*"
+                        maxLength={1}
+                        value={digit}
+                        onChange={(e) => handleOtpChange(idx, e.target.value)}
+                        onKeyDown={(e) => handleOtpKeyDown(idx, e)}
+                        className="h-12 w-11 sm:h-13 sm:w-12 text-center text-xl font-black rounded-xl border border-slate-300 bg-white text-slate-900 focus:border-teal-600 focus:ring-2 focus:ring-teal-600/20 focus:outline-none transition-all shadow-xs"
+                      />
+                    ))}
+                  </div>
+                </div>
 
                 <Button
-                  type="button"
-                  onClick={handleResend}
-                  disabled={cooldownSeconds > 0 || resending}
-                  variant="outline"
-                  className="w-full h-10 border-slate-300 text-slate-700 text-xs font-bold flex items-center justify-center gap-2"
+                  type="submit"
+                  disabled={verifying || otp.join("").length !== 6}
+                  className="w-full h-11 bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm shadow-md flex items-center justify-center gap-2"
                 >
-                  {resending ? (
+                  {verifying ? (
                     <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      <span>Sending Link...</span>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>{verifyingStage || "Verifying Code..."}</span>
                     </>
-                  ) : cooldownSeconds > 0 ? (
-                    <span>Resend available in {cooldownSeconds}s</span>
                   ) : (
                     <>
-                      <RefreshCw className="h-3.5 w-3.5 text-teal-700" />
-                      <span>Resend Verification Email</span>
+                      <ShieldCheck className="h-4 w-4" />
+                      <span>Verify & Continue</span>
+                      <ArrowRight className="h-4 w-4" />
                     </>
                   )}
                 </Button>
+              </form>
+
+              <div className="border-t border-slate-100 pt-4 space-y-3 text-center">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-500">Didn&apos;t get the code?</span>
+                  <button
+                    type="button"
+                    onClick={handleResendOtp}
+                    disabled={cooldown > 0 || resending}
+                    className="font-bold text-teal-700 hover:underline disabled:text-slate-400 flex items-center gap-1.5"
+                  >
+                    {resending ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <span>Sending...</span>
+                      </>
+                    ) : cooldown > 0 ? (
+                      <span>Resend code in {cooldown}s</span>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-3 w-3" />
+                        <span>Resend code</span>
+                      </>
+                    )}
+                  </button>
+                </div>
 
                 <div className="pt-2">
-                  <Link
-                    href="/login"
-                    className="text-xs font-bold text-teal-700 hover:underline inline-flex items-center gap-1"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStep("form");
+                      setError(null);
+                    }}
+                    className="text-xs font-bold text-slate-600 hover:text-teal-700 inline-flex items-center gap-1 hover:underline"
                   >
-                    <span>Already verified your email? Sign In</span>
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </Link>
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    <span>Wrong email address? Go back</span>
+                  </button>
                 </div>
               </div>
             </div>
           ) : (
-            /* REGISTRATION FORM */
+            /* STEP 1: REGISTRATION FORM */
             <div className="space-y-4">
               {/* Google Sign In Option */}
               <Button
@@ -392,12 +595,14 @@ export default function RegisterPage() {
                   <div className="w-full border-t border-slate-200" />
                 </div>
                 <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-white px-2 text-slate-400 font-semibold">Or register with email</span>
+                  <span className="bg-white px-2 text-slate-400 font-semibold">
+                    Or register with email
+                  </span>
                 </div>
               </div>
 
               {/* Email + Password Form */}
-              <form onSubmit={handleSubmit} className="space-y-4">
+              <form onSubmit={handleRegisterSubmit} className="space-y-4">
                 <div className="space-y-1">
                   <Label htmlFor="role">Select Account Type *</Label>
                   <select
@@ -407,7 +612,9 @@ export default function RegisterPage() {
                     className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold focus:border-teal-600 focus:outline-none"
                   >
                     <option value="FAMILY">Family Guardian / Administrator</option>
-                    <option value="CARETAKER">Licensed Nurse / Caretaker (Professional Verification)</option>
+                    <option value="CARETAKER">
+                      Licensed Nurse / Caretaker (Professional Verification)
+                    </option>
                   </select>
                 </div>
 
@@ -484,7 +691,9 @@ export default function RegisterPage() {
                 <div className="rounded-xl bg-teal-50/70 border border-teal-200 p-3 text-[11px] text-teal-900 flex items-start gap-2">
                   <KeyRound className="h-4 w-4 text-teal-700 shrink-0 mt-0.5" />
                   <span>
-                    <strong>Authenticator 2FA:</strong> For healthcare data protection, you will configure a 6-digit Authenticator App code (Google Authenticator, Microsoft Authenticator, or 1Password) after email verification.
+                    <strong>Compulsory Authenticator 2FA:</strong> For healthcare data protection,
+                    you will configure a 6-digit Authenticator App code (Google Authenticator,
+                    Microsoft Authenticator, or 1Password) after email verification.
                   </span>
                 </div>
 
@@ -494,7 +703,9 @@ export default function RegisterPage() {
                     <div className="flex items-center gap-2 border-b border-teal-200 pb-2">
                       <FileCheck className="h-5 w-5 text-teal-700" />
                       <div>
-                        <h3 className="text-xs font-bold text-teal-950">Professional Clinical Credentials</h3>
+                        <h3 className="text-xs font-bold text-teal-950">
+                          Professional Clinical Credentials
+                        </h3>
                         <p className="text-[11px] text-teal-800">
                           Submitted for manual review by CARENEST platform administrators.
                         </p>
@@ -503,7 +714,9 @@ export default function RegisterPage() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-1">
-                        <Label htmlFor="category" className="text-xs">Professional Category *</Label>
+                        <Label htmlFor="category" className="text-xs">
+                          Professional Category *
+                        </Label>
                         <select
                           id="category"
                           value={professionalCategory}
@@ -511,15 +724,25 @@ export default function RegisterPage() {
                           className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold focus:border-teal-600 focus:outline-none"
                         >
                           <option value="Registered Nurse (RN)">Registered Nurse (RN)</option>
-                          <option value="Doctor / Physician Assistant">Doctor / Physician Assistant</option>
-                          <option value="Certified Nursing Assistant (CNA)">Certified Nursing Assistant (CNA)</option>
-                          <option value="Geriatric Care Specialist">Geriatric Care Specialist</option>
-                          <option value="Other Healthcare Professional">Other Healthcare Professional</option>
+                          <option value="Doctor / Physician Assistant">
+                            Doctor / Physician Assistant
+                          </option>
+                          <option value="Certified Nursing Assistant (CNA)">
+                            Certified Nursing Assistant (CNA)
+                          </option>
+                          <option value="Geriatric Care Specialist">
+                            Geriatric Care Specialist
+                          </option>
+                          <option value="Other Healthcare Professional">
+                            Other Healthcare Professional
+                          </option>
                         </select>
                       </div>
 
                       <div className="space-y-1">
-                        <Label htmlFor="qualification" className="text-xs">Highest Qualification *</Label>
+                        <Label htmlFor="qualification" className="text-xs">
+                          Highest Qualification *
+                        </Label>
                         <Input
                           id="qualification"
                           required
@@ -533,7 +756,9 @@ export default function RegisterPage() {
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-1">
-                        <Label htmlFor="regNumber" className="text-xs">Registration / Certificate Number</Label>
+                        <Label htmlFor="regNumber" className="text-xs">
+                          Registration / Certificate Number
+                        </Label>
                         <Input
                           id="regNumber"
                           placeholder="e.g. RN-894721-CA (if applicable)"
@@ -544,7 +769,9 @@ export default function RegisterPage() {
                       </div>
 
                       <div className="space-y-1">
-                        <Label htmlFor="authority" className="text-xs">Issuing Authority *</Label>
+                        <Label htmlFor="authority" className="text-xs">
+                          Issuing Authority *
+                        </Label>
                         <Input
                           id="authority"
                           required
@@ -557,7 +784,9 @@ export default function RegisterPage() {
                     </div>
 
                     <div className="space-y-1">
-                      <Label htmlFor="stateRegion" className="text-xs">State / Province</Label>
+                      <Label htmlFor="stateRegion" className="text-xs">
+                        State / Province
+                      </Label>
                       <Input
                         id="stateRegion"
                         placeholder="e.g. California, Delhi, Maharashtra"
@@ -615,7 +844,9 @@ export default function RegisterPage() {
 
                 {role === "FAMILY" && (
                   <div className="rounded-xl bg-teal-50/70 border border-teal-200 p-3 text-[11px] text-teal-900 leading-relaxed">
-                    <strong>Notice for Senior Patients:</strong> Senior accounts are registered and configured directly by their authorized Family Guardian with an accessible 4-digit PIN for one-step login.
+                    <strong>Notice for Senior Patients:</strong> Senior accounts are registered and
+                    configured directly by their authorized Family Guardian with an accessible
+                    4-digit PIN for one-step login.
                   </div>
                 )}
 

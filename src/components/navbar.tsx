@@ -35,6 +35,22 @@ export function Navbar({
   const [notifications, setNotifications] = React.useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = React.useState(0);
   const [showNotifications, setShowNotifications] = React.useState(false);
+  const [newToast, setNewToast] = React.useState<NotificationItem | null>(null);
+  const [browserNotifEnabled, setBrowserNotifEnabled] = React.useState(false);
+  const previousUnreadIds = React.useRef<Set<string>>(new Set());
+
+  React.useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setBrowserNotifEnabled(Notification.permission === "granted");
+    }
+  }, []);
+
+  const requestBrowserPermission = async () => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      const permission = await Notification.requestPermission();
+      setBrowserNotifEnabled(permission === "granted");
+    }
+  };
 
   // Fetch notifications
   const fetchNotifications = React.useCallback(async () => {
@@ -43,8 +59,31 @@ export function Navbar({
       const res = await fetch("/api/notifications");
       if (res.ok) {
         const data = await res.json();
-        setNotifications(data.notifications || []);
+        const incoming: NotificationItem[] = data.notifications || [];
+        setNotifications(incoming);
         setUnreadCount(data.unreadCount || 0);
+
+        // Detect new unread items for in-app toast & browser notification
+        const unreadItems = incoming.filter((n) => !n.isRead);
+        for (const item of unreadItems) {
+          if (!previousUnreadIds.current.has(item.id)) {
+            previousUnreadIds.current.add(item.id);
+            // Trigger in-app toast
+            setNewToast(item);
+            setTimeout(() => setNewToast(null), 5000);
+
+            // Trigger system browser notification if enabled
+            if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+              try {
+                new Notification(item.title, {
+                  body: item.message,
+                });
+              } catch (e) {
+                console.warn("Notification error", e);
+              }
+            }
+          }
+        }
       }
     } catch {
       // quiet fail on network transient
@@ -237,7 +276,15 @@ export function Navbar({
                     <span className="font-semibold text-sm text-slate-900 dark:text-white">
                       Notifications ({unreadCount} new)
                     </span>
-                    <span className="text-xs text-slate-400">Proactive Care Alerts</span>
+                    {!browserNotifEnabled && (
+                      <button
+                        type="button"
+                        onClick={requestBrowserPermission}
+                        className="text-[10px] font-bold text-teal-700 dark:text-teal-400 hover:underline"
+                      >
+                        Enable Browser Alerts
+                      </button>
+                    )}
                   </div>
 
                   <div className="max-h-80 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800 mt-2">
@@ -318,6 +365,28 @@ export function Navbar({
           )}
         </div>
       </div>
+
+      {/* Floating In-App Toast for New Incoming Alerts */}
+      {newToast && (
+        <div className="fixed bottom-5 right-5 z-50 max-w-sm rounded-2xl bg-slate-900 text-white p-4 shadow-2xl border border-teal-500/40 animate-in slide-in-from-bottom-5">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center space-x-2">
+              <span className="flex h-2.5 w-2.5 rounded-full bg-teal-400 animate-ping" />
+              <h4 className="font-extrabold text-xs text-teal-300 uppercase tracking-wider">
+                {newToast.title}
+              </h4>
+            </div>
+            <button
+              type="button"
+              onClick={() => setNewToast(null)}
+              className="text-slate-400 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-slate-200">{newToast.message}</p>
+        </div>
+      )}
     </header>
   );
 }

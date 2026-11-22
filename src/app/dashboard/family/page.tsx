@@ -26,7 +26,7 @@ export default async function FamilyDashboardPage({
 
   // Ensure email is verified before dashboard access
   if (user.role !== "SENIOR" && !user.isEmailVerified) {
-    redirect("/verify-email");
+    redirect(`/register?step=otp&email=${encodeURIComponent(user.email || "")}`);
   }
 
   // Enforce Authenticator-based 2FA for Family Administrators
@@ -97,6 +97,7 @@ export default async function FamilyDashboardPage({
         include: {
           stock: true,
           schedules: { where: { isActive: true } },
+          assignedBy: { select: { id: true, name: true, role: true } },
         },
         orderBy: { createdAt: "desc" },
       },

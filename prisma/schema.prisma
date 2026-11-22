@@ -145,6 +145,7 @@ model User {
   reviewedCaretakers CaretakerProfile[]    @relation("ReviewedByAdmin")
   caretakerAccessRequests PatientAccessRequest[] @relation("CaretakerAccessRequests")
   familyAdminAccessRequests PatientAccessRequest[] @relation("FamilyAdminAccessRequests")
+  assignedMedications Medication[]       @relation("AssignedMedications")
 
   @@index([email])
 }
@@ -165,6 +166,7 @@ model ElderlyProfile {
   avatarUrl             String?
   isSeniorModeActive    Boolean        @default(false)
   seniorPin             String?        // Hashed 4-digit PIN for rapid simplified senior check-in
+  timeZone              String         @default("Asia/Kolkata")
   createdById           String
   createdBy             User           @relation("CreatedProfiles", fields: [createdById], references: [id], onDelete: Cascade)
   createdAt             DateTime       @default(now())
@@ -216,6 +218,7 @@ model CareCircleMember {
   @@unique([careCircleId, userId])
   @@index([careCircleId])
   @@index([userId])
+  @@index([userId, isActive])
 }
 
 model CareCircleInvitation {
@@ -254,6 +257,9 @@ model Medication {
   purpose               String?               // e.g. "Hypertension", "Type 2 Diabetes"
   isArchived            Boolean               @default(false)
   discontinuedReason    String?
+  assignedById          String?
+  assignedBy            User?                 @relation("AssignedMedications", fields: [assignedById], references: [id], onDelete: SetNull)
+  assignedAt            DateTime?
   createdAt             DateTime              @default(now())
   updatedAt             DateTime              @updatedAt
 
@@ -307,6 +313,7 @@ model ScheduledDose {
   updatedAt             DateTime           @updatedAt
 
   @@index([elderlyProfileId, scheduledAt])
+  @@index([elderlyProfileId, scheduledAt, status])
   @@index([status, scheduledAt])
   @@index([medicationId])
 }
@@ -390,6 +397,7 @@ model CareNote {
   updatedAt           DateTime       @updatedAt
 
   @@index([elderlyProfileId, createdAt])
+  @@index([elderlyProfileId, category, createdAt])
   @@index([category])
 }
 
@@ -405,11 +413,13 @@ model Notification {
   data              Json?
   isRead            Boolean          @default(false)
   readAt            DateTime?
+  dedupKey          String?          @unique
   deliveryStatus    String           @default("SENT") // SENT, FAILED
   emailSent         Boolean          @default(false)
   createdAt         DateTime         @default(now())
 
   @@index([userId, isRead])
+  @@index([userId, isRead, createdAt])
   @@index([createdAt])
 }
 
@@ -514,7 +524,9 @@ model PatientAccessRequest {
   @@unique([elderlyProfileId, caretakerId])
   @@index([elderlyProfileId])
   @@index([caretakerId])
+  @@index([caretakerId, status])
   @@index([familyAdminId])
+  @@index([familyAdminId, status])
   @@index([status])
 }
 

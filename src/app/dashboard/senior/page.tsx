@@ -36,9 +36,8 @@ export default async function SeniorDashboardPage() {
     );
   }
 
-  // Default to Eleanor Vance or first profile
-  const selectedProfile =
-    profiles.find((p) => p.name.includes("Eleanor")) || profiles[0];
+  // Select first authorized profile for the senior
+  const selectedProfile = profiles[0];
 
   const now = new Date();
   const startOfDay = new Date(now);

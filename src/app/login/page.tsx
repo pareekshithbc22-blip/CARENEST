@@ -12,16 +12,6 @@ import { Label } from "@/components/ui/label";
 export default function LoginPage() {
   const router = useRouter();
   const [callbackUrl, setCallbackUrl] = React.useState("/dashboard/family");
-  const [verifiedNotice, setVerifiedNotice] = React.useState(false);
-
-  React.useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      const cb = params.get("callbackUrl");
-      if (cb) setCallbackUrl(cb);
-      if (params.get("verified") === "true") setVerifiedNotice(true);
-    }
-  }, []);
 
   const [mode, setMode] = React.useState<"email" | "pin">("email");
   const [email, setEmail] = React.useState("");
@@ -31,47 +21,40 @@ export default function LoginPage() {
   const [loading, setLoading] = React.useState(false);
   const [googleLoading, setGoogleLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [showResend, setShowResend] = React.useState(false);
-  const [resending, setResending] = React.useState(false);
-  const [resendNotice, setResendNotice] = React.useState<string | null>(null);
-  const [cooldown, setCooldown] = React.useState(0);
 
   React.useEffect(() => {
-    if (cooldown <= 0) return;
-    const timer = setInterval(() => setCooldown((p) => Math.max(0, p - 1)), 1000);
-    return () => clearInterval(timer);
-  }, [cooldown]);
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const cb = params.get("callbackUrl");
+      if (cb) setCallbackUrl(cb);
 
-  const handleResendVerification = async () => {
-    if (!email || cooldown > 0 || resending) return;
-    setResending(true);
-    setResendNotice(null);
-    try {
-      const res = await fetch("/api/auth/resend-verification", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Failed to resend verification email.");
-      } else {
-        setResendNotice(data.message || "A new verification link has been sent to your email.");
-        setCooldown(60);
+      const err = params.get("error");
+      if (err) {
+        if (err === "OAuthAccountNotLinked") {
+          setError("An account with this email already exists. Please sign in with email and password.");
+        } else if (err === "GoogleEmailUnverified") {
+          setError("Your Google account email is not verified by Google. Please verify it or sign in with email and password.");
+        } else if (err === "AccountDeactivated") {
+          setError("This account has been deactivated. Please contact support.");
+        } else if (err === "AccessDenied") {
+          setError("Access was denied during sign-in.");
+        } else if (err === "Callback" || err === "OAuthCallback") {
+          setError("An error occurred during authentication callback. Please try again.");
+        } else if (err === "Configuration") {
+          setError("Authentication service configuration error. Please try again or contact support.");
+        } else if (err === "CredentialsSignin") {
+          setError("Invalid email address or password.");
+        } else {
+          setError("Authentication failed. Please check your credentials and try again.");
+        }
       }
-    } catch {
-      setError("Network error. Please try again.");
-    } finally {
-      setResending(false);
     }
-  };
+  }, []);
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
-    setShowResend(false);
-    setResendNotice(null);
 
     const res = await signIn("credentials", {
       email,
@@ -81,13 +64,10 @@ export default function LoginPage() {
 
     if (res?.error) {
       if (res.error === "EMAIL_NOT_VERIFIED" || res.error.includes("EMAIL_NOT_VERIFIED")) {
-        setError(
-          "Please verify your email address before signing in. Check your inbox for the verification link."
-        );
-        setShowResend(true);
-      } else {
-        setError("Invalid email address or password.");
+        router.push(`/register?step=otp&email=${encodeURIComponent(email.trim())}`);
+        return;
       }
+      setError("Invalid email address or password.");
       setLoading(false);
     } else {
       try {
@@ -152,8 +132,9 @@ export default function LoginPage() {
         return;
       }
 
+      const targetUrl = callbackUrl && callbackUrl !== "/login" ? callbackUrl : "/dashboard/family";
       await signIn("google", {
-        callbackUrl: "/auth/complete-profile",
+        callbackUrl: targetUrl,
       });
     } catch (err: any) {
       setError(err.message || "Failed to initiate Google authentication.");
@@ -237,35 +218,9 @@ export default function LoginPage() {
             </button>
           </div>
 
-          {verifiedNotice && (
-            <div className="mb-4 rounded-xl bg-teal-50 border border-teal-200 p-3 text-xs font-semibold text-teal-800 flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-teal-700 shrink-0" />
-              <span>Authentication verified successfully. Please sign in to access your dashboard.</span>
-            </div>
-          )}
-
           {error && (
-            <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-bold text-rose-800 space-y-2">
-              <div>{error}</div>
-              {showResend && (
-                <div className="pt-1 border-t border-rose-200/60">
-                  <button
-                    type="button"
-                    onClick={handleResendVerification}
-                    disabled={resending || cooldown > 0}
-                    className="text-xs font-bold text-teal-800 underline hover:text-teal-950 disabled:text-slate-400"
-                  >
-                    {resending ? "Sending verification email..." : cooldown > 0 ? `Resend available in ${cooldown}s` : "Resend verification email now"}
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {resendNotice && (
-            <div className="mb-4 rounded-xl bg-teal-50 border border-teal-200 p-3 text-xs font-semibold text-teal-800 flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-teal-700 shrink-0" />
-              <span>{resendNotice}</span>
+            <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-bold text-rose-800">
+              {error}
             </div>
           )}
 

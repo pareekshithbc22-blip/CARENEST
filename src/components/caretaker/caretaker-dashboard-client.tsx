@@ -27,6 +27,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { CaretakerPatientMonitor } from "@/components/caretaker/caretaker-patient-monitor";
+import { useDashboardPolling } from "@/hooks/use-dashboard-polling";
 
 export interface PatientSummary {
   id: string;
@@ -37,6 +38,12 @@ export interface PatientSummary {
   emergencyContactPhone?: string;
   medicalConditions?: string[];
   allergies?: string[];
+  latestBloodSugar?: string | null;
+  latestBloodPressure?: string | null;
+  sugarSeverity?: "NORMAL" | "WARNING" | "CRITICAL";
+  bpSeverity?: "NORMAL" | "WARNING" | "CRITICAL";
+  doseProgress?: { taken: number; total: number };
+  alertBadges?: string[];
 }
 
 export interface CaretakerProfileData {
@@ -79,6 +86,16 @@ export function CaretakerDashboardClient({
     initialSelectedPatientId || profiles[0]?.id || ""
   );
   const [activeTab, setActiveTab] = React.useState<ClinicalTab>("medications");
+
+  // Automatic Polling for Role Caretaker (15s visible, 60s hidden with backoff)
+  const { lastUpdated, isRefreshing, refreshNow } = useDashboardPolling({
+    role: "caretaker",
+    onUpdate: () => {
+      if (selectedProfileId) {
+        loadPatientData(selectedProfileId);
+      }
+    },
+  });
 
   // Patient-specific clinical data states
   const [doses, setDoses] = React.useState<any[]>([]);
@@ -395,9 +412,18 @@ export function CaretakerDashboardClient({
               <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight mt-2">
                 Welcome, {caretakerName}
               </h1>
-              <p className="text-xs font-medium text-slate-600 mt-1">
-                Overseeing multi-patient vital signs telemetry, administering scheduled doses, and coordinating daily shift handovers.
-              </p>
+              <div className="flex items-center space-x-2 mt-2 text-[11px] text-slate-500">
+                <span className={`inline-block h-2 w-2 rounded-full ${isRefreshing ? "bg-amber-500 animate-ping" : "bg-emerald-500"}`} />
+                <span>Last updated: {lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+                <button
+                  type="button"
+                  onClick={() => refreshNow()}
+                  disabled={isRefreshing}
+                  className="text-teal-700 hover:underline font-bold ml-1"
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
 
             {/* Primary Mode Switcher (My Patients vs Find Patients) */}
@@ -500,20 +526,54 @@ export function CaretakerDashboardClient({
                         </div>
 
                         {/* Emergency Contact & Conditions */}
-                        <div className="mt-3 pt-3 border-t border-slate-100 space-y-1 text-xs">
-                          {p.emergencyContactName && (
-                            <div className="flex items-center justify-between text-[11px]">
-                              <span className="text-slate-500">Family Contact:</span>
-                              <span className="font-semibold text-slate-800">
-                                {p.emergencyContactName} ({p.emergencyContactPhone || "No phone"})
+                        <div className="mt-3 pt-3 border-t border-slate-100 space-y-2 text-xs">
+                          {/* Latest Vitals Display */}
+                          <div className="grid grid-cols-2 gap-2 bg-slate-50 dark:bg-slate-800/60 p-2 rounded-xl">
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block">Sugar</span>
+                              <span className="font-extrabold text-slate-800 dark:text-slate-200">
+                                {p.latestBloodSugar || "--"}
                               </span>
                             </div>
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block">Blood Pressure</span>
+                              <span className="font-extrabold text-slate-800 dark:text-slate-200">
+                                {p.latestBloodPressure || "--"}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Dose Progress & Alerts */}
+                          <div className="flex items-center justify-between text-[11px] pt-1">
+                            <span className="text-slate-500 font-medium">Today's Doses:</span>
+                            <span className="font-bold text-teal-800 dark:text-teal-400">
+                              {p.doseProgress ? `${p.doseProgress.taken} / ${p.doseProgress.total} Taken` : "0 Scheduled"}
+                            </span>
+                          </div>
+
+                          {/* Alert Badges */}
+                          {p.alertBadges && p.alertBadges.length > 0 && (
+                            <div className="flex flex-wrap gap-1 pt-1">
+                              {p.alertBadges.map((badge, idx) => (
+                                <span
+                                  key={idx}
+                                  className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                    badge.includes("Missed") || badge.includes("Critical")
+                                      ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
+                                      : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                  }`}
+                                >
+                                  {badge}
+                                </span>
+                              ))}
+                            </div>
                           )}
-                          {p.medicalConditions && p.medicalConditions.length > 0 && (
-                            <div className="flex items-center justify-between text-[11px] pt-1">
-                              <span className="text-slate-500">Conditions:</span>
-                              <span className="font-semibold text-teal-800 truncate max-w-[180px]">
-                                {p.medicalConditions.join(", ")}
+
+                          {p.emergencyContactName && (
+                            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
+                              <span>Contact:</span>
+                              <span className="font-semibold text-slate-700 dark:text-slate-300 truncate max-w-[150px]">
+                                {p.emergencyContactName}
                               </span>
                             </div>
                           )}
@@ -791,11 +851,17 @@ export function CaretakerDashboardClient({
             </div>
           ) : (
             <>
-              {/* Live Health Telemetry (Isolated to selected patient) */}
+              {/* Clinical Health Monitor (Isolated to selected patient) */}
               <CaretakerPatientMonitor
                 profiles={profiles}
                 activeProfileId={selectedProfileId}
                 onSelectProfile={(id) => setSelectedProfileId(id)}
+                onMedicationCreated={() => {
+                  if (selectedProfileId) loadPatientData(selectedProfileId);
+                }}
+                onTaskCreated={() => {
+                  if (selectedProfileId) loadPatientData(selectedProfileId);
+                }}
               />
 
               {/* Clinical Care Management & Vitals Logging */}

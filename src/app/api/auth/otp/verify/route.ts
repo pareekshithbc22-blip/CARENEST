@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { verifyEmailOtp } from "@/lib/otp";
+import { prisma } from "@/lib/prisma";
 
 const VerifyOtpSchema = z.object({
   email: z.string().email("A valid email address is required"),
@@ -20,11 +21,12 @@ export async function POST(req: Request) {
     }
 
     const { email, otp } = validated.data;
-    const result = await verifyEmailOtp(email, otp);
+    const normalizedEmail = email.toLowerCase().trim();
+    const result = await verifyEmailOtp(normalizedEmail, otp);
 
     if (!result.success) {
       console.warn(
-        `[CareNest OTP Diagnostics] Status: OTP_VERIFICATION_FAILED | Email: ${email.toLowerCase().trim()} | Reason: ${result.error}`
+        `[CareNest OTP Diagnostics] Status: OTP_VERIFICATION_FAILED | Email: ${normalizedEmail} | Reason: ${result.error}`
       );
       return NextResponse.json(
         {
@@ -35,8 +37,17 @@ export async function POST(req: Request) {
       );
     }
 
+    // Explicitly update user verification status
+    await prisma.user.updateMany({
+      where: { email: normalizedEmail },
+      data: {
+        isEmailVerified: true,
+        emailVerified: new Date(),
+      },
+    });
+
     console.log(
-      `[CareNest OTP Diagnostics] Status: OTP_VERIFICATION_SUCCESS | Email: ${email.toLowerCase().trim()}`
+      `[CareNest OTP Diagnostics] Status: OTP_VERIFICATION_SUCCESS | Email: ${normalizedEmail}`
     );
 
     return NextResponse.json(

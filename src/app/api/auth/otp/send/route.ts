@@ -24,27 +24,35 @@ export async function POST(req: Request) {
     const { email, name } = validated.data;
     const normalizedEmail = email.toLowerCase().trim();
 
-    // Check if account already exists
+    // Check if account already exists and is already verified
     const existingUser = await prisma.user.findUnique({
       where: { email: normalizedEmail },
     });
 
-    if (existingUser) {
+    if (existingUser && existingUser.isEmailVerified) {
       return NextResponse.json(
         {
-          error: "An account with this email address already exists. Please sign in instead.",
+          error: "An account with this email address is already verified. Please sign in instead.",
         },
         { status: 409 }
       );
     }
 
     // Request and dispatch OTP
-    const result = await requestEmailOtp(normalizedEmail, name || "Family Administrator");
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      req.headers.get("x-real-ip") ||
+      undefined;
+    const result = await requestEmailOtp(
+      normalizedEmail,
+      name || existingUser?.name || "Care Member",
+      ip
+    );
 
     if (!result.success) {
       return NextResponse.json(
         {
-          error: result.error || "Failed to send verification code.",
+          error: result.error || "We could not send the email. Please try again.",
           cooldownSeconds: result.cooldownSeconds,
         },
         { status: result.cooldownSeconds ? 429 : 400 }
@@ -54,7 +62,8 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         success: true,
-        message: result.message,
+        message: result.message || `Verification code sent to ${normalizedEmail}.`,
+        devNotice: result.devNotice,
         cooldownSeconds: result.cooldownSeconds ?? 60,
       },
       { status: 200 }

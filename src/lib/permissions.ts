@@ -85,71 +85,32 @@ export async function getAuthorizedProfiles(userId: string) {
     }
   }
 
-  // If user has role SENIOR and still has 0 profiles, auto-provision for their personal senior dashboard!
-  if (profileMap.size === 0) {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (user?.role === "SENIOR") {
-      const pinHash = await bcrypt.hash("1234", 10);
-      const newProfile = await prisma.$transaction(async (tx) => {
-        const p = await tx.elderlyProfile.create({
-          data: {
-            name: user.name,
-            preferredName: user.name,
-            dateOfBirth: new Date("1952-05-14"),
-            emergencyContactName: "Primary Family Coordinator",
-            emergencyContactPhone: user.phoneNumber || "+1 (555) 234-5678",
-            emergencyContactRelation: "Family Coordinator",
-            isSeniorModeActive: true,
-            seniorPin: pinHash,
-            createdById: user.id,
+  // Include profiles linked through approved PatientAccessRequest for caretakers
+  if (user?.role === "CARETAKER") {
+    const approvedRequests = await prisma.patientAccessRequest.findMany({
+      where: {
+        caretakerId: userId,
+        status: "APPROVED",
+      },
+      include: {
+        elderlyProfile: {
+          include: {
+            careCircles: {
+              include: {
+                members: {
+                  include: { user: { select: { id: true, name: true, email: true, role: true, avatarUrl: true } } },
+                },
+              },
+            },
           },
-        });
+        },
+      },
+    });
 
-        const c = await tx.careCircle.create({
-          data: {
-            name: `${user.name}'s Care Circle`,
-            elderlyProfileId: p.id,
-            createdById: user.id,
-          },
-        });
-
-        await tx.careCircleMember.create({
-          data: {
-            careCircleId: c.id,
-            userId: user.id,
-            role: "SENIOR",
-            permissions: ["CAN_VIEW_RECORDS", "CAN_CONFIRM_DOSE"],
-          },
-        });
-
-        const med = await tx.medication.create({
-          data: {
-            elderlyProfileId: p.id,
-            name: "Lisinopril",
-            strength: "10 mg",
-            form: "TABLET",
-            dosageInstructions: "Take 1 tablet every morning with water",
-            purpose: "Blood Pressure Maintenance",
-          },
-        });
-
-        const now = new Date();
-        const morningDose = new Date(now);
-        morningDose.setHours(8, 0, 0, 0);
-
-        await tx.scheduledDose.create({
-          data: {
-            medicationId: med.id,
-            elderlyProfileId: p.id,
-            scheduledAt: morningDose,
-            status: "SCHEDULED",
-          },
-        });
-
-        return p;
-      });
-
-      profileMap.set(newProfile.id, newProfile);
+    for (const req of approvedRequests) {
+      if (req.elderlyProfile && !profileMap.has(req.elderlyProfile.id)) {
+        profileMap.set(req.elderlyProfile.id, req.elderlyProfile);
+      }
     }
   }
 
@@ -233,7 +194,7 @@ export async function verifyProfileAccess(
 
   // Check circle memberships
   for (const circle of profile.careCircles) {
-    const member = circle.members[0];
+    const member = circle.members?.find((m: any) => m.userId === userId && m.isActive !== false);
     if (member) {
       if (!requiredPermission) {
         return { authorized: true, profile, memberRecord: member };
@@ -241,7 +202,7 @@ export async function verifyProfileAccess(
 
       // If requiredPermission is CAN_MANAGE_MEDS, member must have CAN_MANAGE_MEDS AND be a CARETAKER
       if (requiredPermission === "CAN_MANAGE_MEDS") {
-        if (member.role === "CARETAKER" && (member.permissions.includes("CAN_MANAGE_MEDS") || user?.role === "CARETAKER")) {
+        if (member.role === "CARETAKER" && (member.permissions?.includes("CAN_MANAGE_MEDS") || user?.role === "CARETAKER")) {
           return { authorized: true, profile, memberRecord: member };
         }
         return { authorized: false, reason: "FORBIDDEN", profile, memberRecord: member };
@@ -249,11 +210,26 @@ export async function verifyProfileAccess(
 
       // Check permission array
       const hasPermission =
-        member.role === "ADMIN" || member.permissions.includes(requiredPermission);
+        member.role === "ADMIN" || Boolean(member.permissions?.includes(requiredPermission));
 
       if (hasPermission) {
         return { authorized: true, profile, memberRecord: member };
       }
+    }
+  }
+
+  // If caretaker has an approved non-revoked PatientAccessRequest for this patient
+  if (user?.role === "CARETAKER") {
+    const approvedRequest = await prisma.patientAccessRequest.findFirst({
+      where: {
+        caretakerId: userId,
+        elderlyProfileId,
+        status: "APPROVED",
+      },
+    });
+
+    if (approvedRequest) {
+      return { authorized: true, profile, memberRecord: null };
     }
   }
 
@@ -281,7 +257,7 @@ export async function verifyCircleAdmin(userId: string, careCircleId: string) {
     return { authorized: true, circle };
   }
 
-  const member = circle.members[0];
+  const member = circle.members?.find((m: any) => m.userId === userId && m.isActive !== false);
   if (member && member.role === "ADMIN") {
     return { authorized: true, circle };
   }
