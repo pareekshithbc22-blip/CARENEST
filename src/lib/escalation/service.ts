@@ -51,6 +51,7 @@ export async function processDoseEscalations(): Promise<EscalationRunSummary> {
           select: {
             id: true,
             name: true,
+            patientCode: true,
             createdById: true,
             careCircles: {
               take: 1,
@@ -145,6 +146,7 @@ export async function processDoseEscalations(): Promise<EscalationRunSummary> {
           hour: "2-digit",
           minute: "2-digit",
         });
+        const patientLabel = profile.patientCode ? `${profile.name} (${profile.patientCode})` : profile.name;
 
         for (const recipient of recipientsMap.values()) {
           const dedupKey = `missed-dose-${dose.id}-${recipient.id}`;
@@ -154,7 +156,7 @@ export async function processDoseEscalations(): Promise<EscalationRunSummary> {
             try {
               await sendMissedDoseAlertEmail({
                 to: recipient.email,
-                seniorName: profile.name,
+                seniorName: patientLabel,
                 medicationName: med.name,
                 strength: med.strength,
                 scheduledTime: scheduledTimeStr,
@@ -173,8 +175,8 @@ export async function processDoseEscalations(): Promise<EscalationRunSummary> {
                 userId: recipient.id,
                 elderlyProfileId: profile.id,
                 type: "MISSED_DOSE_ALERT",
-                title: `🚨 Missed Dose: ${med.name} (${med.strength})`,
-                message: `${profile.name} did not confirm or skip their scheduled dose at ${scheduledTimeStr} within the ${DOSE_GRACE_MINUTES}-minute grace period.`,
+                title: `🚨 Missed Dose: ${med.name}`,
+                message: `${patientLabel} has not taken ${med.name} scheduled at ${scheduledTimeStr}.`,
                 dedupKey,
                 emailSent: emailSentStatus,
                 data: {

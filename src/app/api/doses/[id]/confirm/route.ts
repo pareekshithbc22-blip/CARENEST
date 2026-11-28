@@ -61,6 +61,7 @@ export async function POST(
 
     const now = new Date();
     const doseQuantity = dose.schedule?.dosageQuantity || 1.0;
+    const takenBy = user.role === "SENIOR" ? "patient" : "caretaker";
 
     const result = await prisma.$transaction(async (tx) => {
       // 1. Update Dose Status
@@ -71,6 +72,7 @@ export async function POST(
           confirmedAt: now,
           confirmedById: user.id,
           confirmationNotes,
+          takenBy,
         },
         include: {
           medication: true,
@@ -91,11 +93,20 @@ export async function POST(
           data: { currentStock: newStockLevel },
         });
 
+        // Keep Medication.stockCount in sync
+        await tx.medication.update({
+          where: { id: dose.medication.id },
+          data: {
+            stockCount: Math.round(newStockLevel),
+            stockUpdatedAt: now,
+            stockUpdatedById: user.id,
+          },
+        });
+
         // Check if stock has reached or dropped below refill threshold
         if (newStockLevel <= stock.refillThreshold && stock.currentStock > stock.refillThreshold) {
           triggeredRefillAlert = true;
 
-          // Create in-app notification for Care Circle
           const profile = await tx.elderlyProfile.findUnique({
             where: { id: dose.elderlyProfileId },
             include: {
@@ -129,6 +140,16 @@ export async function POST(
             }
           }
         }
+      } else if (dose.medication.stockCount !== null && dose.medication.stockCount !== undefined) {
+        newStockLevel = Math.max(0, dose.medication.stockCount - Math.round(doseQuantity));
+        await tx.medication.update({
+          where: { id: dose.medication.id },
+          data: {
+            stockCount: newStockLevel,
+            stockUpdatedAt: now,
+            stockUpdatedById: user.id,
+          },
+        });
       }
 
       // 3. Audit Log
@@ -143,6 +164,7 @@ export async function POST(
             medication: dose.medication.name,
             confirmedBy: user.name,
             confirmedByRole: user.role,
+            takenBy,
             timestamp: now.toISOString(),
             remainingStock: newStockLevel,
             triggeredRefillAlert,

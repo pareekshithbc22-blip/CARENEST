@@ -1,56 +1,72 @@
 import { NextResponse } from "next/server";
-import path from "path";
-import fs from "fs";
 import crypto from "crypto";
-
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB
-
-const ALLOWED_MIME_TYPES = new Set([
-  "application/pdf",
-  "image/jpeg",
-  "image/png",
-  "image/jpg",
-]);
-
-const ALLOWED_EXTENSIONS = new Set([".pdf", ".jpg", ".jpeg", ".png"]);
-
-/**
- * Validates file buffer magic bytes to prevent file spoofing
- */
-function isValidFileHeader(buffer: Buffer, mimeType: string): boolean {
-  if (buffer.length < 4) return false;
-
-  if (mimeType === "application/pdf") {
-    // %PDF-
-    return (
-      buffer[0] === 0x25 &&
-      buffer[1] === 0x50 &&
-      buffer[2] === 0x44 &&
-      buffer[3] === 0x46
-    );
-  }
-
-  if (mimeType === "image/jpeg" || mimeType === "image/jpg") {
-    // 0xFF, 0xD8, 0xFF
-    return buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
-  }
-
-  if (mimeType === "image/png") {
-    // 0x89, 'P', 'N', 'G'
-    return (
-      buffer[0] === 0x89 &&
-      buffer[1] === 0x50 &&
-      buffer[2] === 0x4e &&
-      buffer[3] === 0x47
-    );
-  }
-
-  return false;
-}
+import { validateCertificateFile } from "@/lib/verification/security/file-validator";
+import { getFileScanner } from "@/lib/verification/security/file-scanner";
+import { getFileStorage } from "@/lib/verification/storage";
+import { verifyUploadToken, cleanOrphanUploadedFiles } from "@/lib/security";
+import {
+  checkPersistentRateLimit,
+  recordPersistentFailedAttempt,
+  resetPersistentRateLimit,
+} from "@/lib/services/rate-limit-service";
 
 export async function POST(req: Request) {
   try {
+    // 1. Content-Length pre-check: Reject files > 10 MB before reading body into memory
+    const contentLength = req.headers.get("content-length");
+    if (contentLength && parseInt(contentLength, 10) > 10 * 1024 * 1024) {
+      return NextResponse.json(
+        { error: "Payload too large. Maximum allowed file size is 10 MB." },
+        { status: 413 }
+      );
+    }
+
+    // 2. IP extraction & Persistent Rate Limiting
+    const ip =
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      req.headers.get("x-real-ip") ||
+      "127.0.0.1";
+
+    const rateStatus = await checkPersistentRateLimit({
+      action: "UPLOAD",
+      identifier: ip,
+      ip,
+    });
+
+    if (!rateStatus.allowed) {
+      return NextResponse.json(
+        {
+          error: `Too many upload attempts from this network. Please try again in ${Math.ceil(
+            (rateStatus.remainingSeconds || 900) / 60
+          )} minutes.`,
+        },
+        { status: 429 }
+      );
+    }
+
     const formData = await req.formData();
+
+    // 3. Upload Token requirement (Short-lived HMAC token issued by registration step)
+    const uploadToken =
+      (formData.get("uploadToken") as string) ||
+      req.headers.get("x-upload-token") ||
+      null;
+
+    if (!uploadToken || !verifyUploadToken(uploadToken)) {
+      await recordPersistentFailedAttempt({
+        action: "UPLOAD",
+        identifier: ip,
+        ip,
+      });
+      return NextResponse.json(
+        {
+          error:
+            "Access denied: Missing, invalid, or expired upload token. Please restart your registration to obtain a fresh token.",
+        },
+        { status: 403 }
+      );
+    }
+
     const file = formData.get("file");
 
     if (!file || typeof file === "string") {
@@ -61,69 +77,58 @@ export async function POST(req: Request) {
     }
 
     const blob = file as File;
-
-    // 1. File size check
-    if (blob.size > MAX_FILE_SIZE_BYTES) {
-      return NextResponse.json(
-        { error: "Document file size exceeds the 10 MB limit. Please upload a smaller file." },
-        { status: 400 }
-      );
-    }
-
-    if (blob.size === 0) {
-      return NextResponse.json({ error: "Uploaded file is empty." }, { status: 400 });
-    }
-
-    // 2. MIME type check
-    const mimeType = blob.type.toLowerCase();
-    if (!ALLOWED_MIME_TYPES.has(mimeType)) {
-      return NextResponse.json(
-        { error: "Invalid document format. Only PDF, JPG, and PNG files are supported." },
-        { status: 400 }
-      );
-    }
-
-    // 3. Extension check
-    const originalExt = path.extname(blob.name).toLowerCase();
-    if (!ALLOWED_EXTENSIONS.has(originalExt)) {
-      return NextResponse.json(
-        { error: `Invalid file extension (${originalExt}). Only .pdf, .jpg, and .png are permitted.` },
-        { status: 400 }
-      );
-    }
-
-    // 4. Magic bytes content verification
     const arrayBuffer = await blob.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    if (!isValidFileHeader(buffer, mimeType)) {
+    // 4. Strict magic bytes, size (<= 10MB), and content validation
+    const validation = validateCertificateFile(buffer);
+    if (!validation.valid || !validation.mimeType || !validation.extension) {
+      await recordPersistentFailedAttempt({
+        action: "UPLOAD",
+        identifier: ip,
+        ip,
+      });
       return NextResponse.json(
-        { error: "File content does not match its declared format. Please upload an authentic PDF, JPG, or PNG document." },
+        { error: validation.error || "Invalid document format. Please upload an authentic PDF, JPG, or PNG document." },
         { status: 400 }
       );
     }
 
-    // 5. Ensure secure destination directory exists
-    const secureStorageDir = path.resolve(process.cwd(), "storage", "secure_documents");
-    if (!fs.existsSync(secureStorageDir)) {
-      fs.mkdirSync(secureStorageDir, { recursive: true });
+    // 5. Antivirus file scan hook
+    const scanner = getFileScanner();
+    const scanResult = await scanner.scan(validation.sanitizedBuffer, blob.name);
+    if (!scanResult.clean) {
+      await recordPersistentFailedAttempt({
+        action: "UPLOAD",
+        identifier: ip,
+        ip,
+      });
+      return NextResponse.json(
+        { error: `Security check failed: Malicious content detected (${scanResult.threatName || "Suspicious File"}). Upload declined.` },
+        { status: 400 }
+      );
     }
 
-    // 6. Write securely with non-predictable UUID filename
-    const sanitizedExt = originalExt || (mimeType === "application/pdf" ? ".pdf" : ".jpg");
-    const uniqueFileName = `cert_${Date.now()}_${crypto.randomUUID()}${sanitizedExt}`;
-    const destinationPath = path.join(secureStorageDir, uniqueFileName);
+    // 6. Save via abstract FileStorage adapter (Local disk or S3)
+    const storage = getFileStorage();
+    const uniqueFileName = `cert_${Date.now()}_${crypto.randomUUID()}${validation.extension}`;
+    const saved = await storage.saveFile(uniqueFileName, validation.sanitizedBuffer, validation.mimeType);
 
-    fs.writeFileSync(destinationPath, buffer);
+    // Reset rate limiter on successful upload
+    await resetPersistentRateLimit("UPLOAD", ip, ip);
 
-    const relativePath = path.join("storage", "secure_documents", uniqueFileName).replace(/\\/g, "/");
+    // Asynchronously trigger orphan document cleanup (> 24 hours) without blocking client response
+    cleanOrphanUploadedFiles().catch((e) => {
+      console.warn("[Orphan file cleanup background warning]:", e);
+    });
 
     return NextResponse.json({
       success: true,
       documentFileName: blob.name,
-      documentFilePath: relativePath,
-      documentMimeType: mimeType,
-      documentFileSize: blob.size,
+      documentFilePath: saved.storagePath,
+      documentMimeType: validation.mimeType,
+      documentFileSize: saved.size,
+      documentHash: validation.fileHash,
       message: "Certificate uploaded securely to CARENEST document vault.",
     });
   } catch (error: any) {

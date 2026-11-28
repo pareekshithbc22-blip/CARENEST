@@ -2,39 +2,16 @@ import { AuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { prisma } from "./prisma";
 import { verifyEmailLoginExchangeToken } from "./email-verification";
-
-// In-memory rate limiting to protect senior PINs against brute-force attempts
-interface RateLimitEntry {
-  attempts: number;
-  lockedUntil: number;
-}
-const pinRateLimitMap = new Map<string, RateLimitEntry>();
-
-function getPinRateLimit(key: string) {
-  const entry = pinRateLimitMap.get(key);
-  if (!entry) return { locked: false };
-  if (entry.lockedUntil > Date.now()) return { locked: true };
-  if (entry.lockedUntil > 0 && entry.lockedUntil <= Date.now()) {
-    pinRateLimitMap.delete(key);
-    return { locked: false };
-  }
-  return { locked: false };
-}
-
-function recordFailedPinAttempt(key: string) {
-  const entry = pinRateLimitMap.get(key) || { attempts: 0, lockedUntil: 0 };
-  entry.attempts += 1;
-  if (entry.attempts >= 5) {
-    entry.lockedUntil = Date.now() + 15 * 60 * 1000; // 15 minutes lockout
-  }
-  pinRateLimitMap.set(key, entry);
-}
-
-function resetPinRateLimit(key: string) {
-  pinRateLimitMap.delete(key);
-}
+import { getNextAuthSecret, checkServerTwoFactorStatus } from "./security";
+import { normalizePatientId } from "./domain/patient-code";
+import {
+  checkPersistentRateLimit,
+  recordPersistentFailedAttempt,
+  resetPersistentRateLimit,
+} from "./services/rate-limit-service";
 
 const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
 const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
@@ -42,7 +19,7 @@ const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
 export const authOptions: AuthOptions = {
   session: {
     strategy: "jwt",
-    maxAge: 30 * 24 * 60 * 60, // 30 days
+    maxAge: 8 * 60 * 60, // 8 hours with sliding refresh
   },
   pages: {
     signIn: "/login",
@@ -50,7 +27,7 @@ export const authOptions: AuthOptions = {
     error: "/login",
   },
   providers: [
-    // Social Authentication: Google OAuth 2.0 (Structured cleanly so additional providers can easily be appended)
+    // Social Authentication: Google OAuth 2.0
     GoogleProvider({
       clientId: googleClientId || "unconfigured_google_client_id",
       clientSecret: googleClientSecret || "unconfigured_google_client_secret",
@@ -109,23 +86,30 @@ export const authOptions: AuthOptions = {
         }
 
         // 2. PIN-based Senior Login Support
+        // Senior logs in with their exact patient code (PT-xxxx) plus PIN.
+        // Loads exactly one profile, does a single bcrypt.compare, and fails if no linked senior user.
         if (credentials.pin && !credentials.password) {
           const pin = credentials.pin.trim();
-          const identifier = credentials.patientIdentifier?.trim().toLowerCase();
-          const rateKey = identifier || "global_pin_attempt";
+          const cleanCode = normalizePatientId(credentials.patientIdentifier);
 
-          const limitStatus = getPinRateLimit(rateKey);
-          if (limitStatus.locked) {
-            throw new Error(
-              "Account temporarily locked due to excessive failed PIN attempts. Please try again in 15 minutes."
-            );
+          if (!cleanCode || !pin) {
+            return null;
           }
 
-          let profiles = await prisma.elderlyProfile.findMany({
-            where: {
-              isSeniorModeActive: true,
-              seniorPin: { not: null },
-            },
+          // Persistent database-backed rate limiting per patient code
+          const limitStatus = await checkPersistentRateLimit({
+            action: "PIN_LOGIN",
+            identifier: cleanCode,
+          });
+
+          if (!limitStatus.allowed) {
+            const minutes = Math.ceil((limitStatus.remainingSeconds || 900) / 60);
+            throw new Error(`RATE_LIMIT_LOCKED:${minutes}`);
+          }
+
+          // Load exactly one profile by exact patient code
+          const profile = await prisma.elderlyProfile.findUnique({
+            where: { patientCode: cleanCode },
             include: {
               careCircles: {
                 include: {
@@ -138,65 +122,115 @@ export const authOptions: AuthOptions = {
             },
           });
 
-          if (identifier) {
-            profiles = profiles.filter((p) => {
-              const nameMatch = p.name.toLowerCase().includes(identifier);
-              const prefMatch = p.preferredName?.toLowerCase().includes(identifier);
-              const phoneClean = p.emergencyContactPhone?.replace(/\D/g, "");
-              const idClean = identifier.replace(/\D/g, "");
-              const phoneMatch = Boolean(idClean && phoneClean && phoneClean.includes(idClean));
-              const idMatch = p.id.toLowerCase().startsWith(identifier);
-              return nameMatch || prefMatch || phoneMatch || idMatch;
+          if (!profile || !profile.seniorPin || !profile.isSeniorModeActive) {
+            await recordPersistentFailedAttempt({
+              action: "PIN_LOGIN",
+              identifier: cleanCode,
             });
+            return null;
           }
 
-          for (const profile of profiles) {
-            if (profile.seniorPin && bcrypt.compareSync(pin, profile.seniorPin)) {
-              resetPinRateLimit(rateKey);
+          // Single bcrypt.compare on the loaded profile's PIN only
+          const isPinValid = await bcrypt.compare(pin, profile.seniorPin);
+          if (!isPinValid) {
+            await recordPersistentFailedAttempt({
+              action: "PIN_LOGIN",
+              identifier: cleanCode,
+            });
+            return null;
+          }
 
-              // Find the linked senior user in this profile's care circle
-              let seniorUser = null;
-              for (const circle of profile.careCircles) {
-                const member = circle.members[0];
-                if (member?.user && member.user.role === "SENIOR") {
-                  seniorUser = member.user;
-                  break;
-                }
-              }
-
-              if (!seniorUser) {
-                seniorUser = await prisma.user.findFirst({
-                  where: {
-                    OR: [{ email: { contains: "eleanor" } }, { role: "SENIOR" }],
-                  },
-                });
-              }
-
-              if (seniorUser) {
-                return {
-                  id: seniorUser.id,
-                  email: seniorUser.email,
-                  name: profile.preferredName || profile.name,
-                  role: "SENIOR",
-                  avatarUrl: profile.avatarUrl,
-                  phoneNumber: profile.emergencyContactPhone,
-                  twoFactorEnabled: false,
-                  twoFactorVerified: true, // Seniors with PIN check-in are pre-verified
-                  twoFactorPendingSetup: false,
-                  isEmailVerified: true,
-                  needsProfileCompletion: false,
-                };
-              }
+          // Find the linked senior user in this profile's care circle
+          let seniorUser = null;
+          for (const circle of profile.careCircles) {
+            const member = circle.members[0];
+            if (member?.user && member.user.role === "SENIOR" && member.user.isActive) {
+              seniorUser = member.user;
+              break;
             }
           }
 
-          recordFailedPinAttempt(rateKey);
-          return null;
+          // If no linked senior user exists yet in this profile's care circle, link or create one
+          if (!seniorUser && profile.careCircles.length > 0) {
+            const circle = profile.careCircles[0];
+            const seniorEmail = `${cleanCode.toLowerCase()}@carenest.patient`;
+            seniorUser = await prisma.user.upsert({
+              where: { email: seniorEmail },
+              create: {
+                name: profile.preferredName || profile.name,
+                email: seniorEmail,
+                role: "SENIOR",
+                passwordHash: profile.seniorPin,
+                isEmailVerified: true,
+                emailVerified: new Date(),
+                twoFactorEnabled: false,
+                isActive: true,
+              },
+              update: {
+                name: profile.preferredName || profile.name,
+                role: "SENIOR",
+                passwordHash: profile.seniorPin,
+                isActive: true,
+              },
+            });
+
+            await prisma.careCircleMember.create({
+              data: {
+                careCircleId: circle.id,
+                userId: seniorUser.id,
+                role: "SENIOR",
+                isActive: true,
+                permissions: ["CAN_VIEW_RECORDS", "CAN_CONFIRM_DOSE"],
+              },
+            });
+          }
+
+          // Fail the login if the profile still has no linked senior user
+          if (!seniorUser) {
+            await recordPersistentFailedAttempt({
+              action: "PIN_LOGIN",
+              identifier: cleanCode,
+            });
+            return null;
+          }
+
+          // Reset rate limit counter upon successful PIN authentication
+          await resetPersistentRateLimit("PIN_LOGIN", cleanCode);
+
+          return {
+            id: seniorUser.id,
+            email: seniorUser.email,
+            name: profile.preferredName || profile.name,
+            role: "SENIOR",
+            avatarUrl: profile.avatarUrl,
+            phoneNumber: profile.emergencyContactPhone,
+            twoFactorEnabled: false,
+            twoFactorVerified: true, // Seniors with PIN check-in are pre-verified
+            twoFactorPendingSetup: false,
+            isEmailVerified: true,
+            needsProfileCompletion: false,
+          };
         }
 
         // 3. Standard Email + Password Login
         if (!credentials.email || !credentials.password) {
           return null;
+        }
+
+        const normalizedEmail = credentials.email.toLowerCase().trim();
+
+        // Persistent database rate limiting for password login
+        const passLimitStatus = await checkPersistentRateLimit({
+          action: "PASSWORD_LOGIN",
+          identifier: normalizedEmail,
+        });
+
+        if (!passLimitStatus.allowed) {
+          throw new Error(
+            `Account temporarily locked due to excessive failed login attempts. Please try again in ${Math.ceil(
+              (passLimitStatus.remainingSeconds || 900) / 60
+            )} minutes.`
+          );
         }
 
         const user = await prisma.user.findUnique({
@@ -216,8 +250,15 @@ export const authOptions: AuthOptions = {
         const isPasswordValid = await bcrypt.compare(credentials.password, user.passwordHash);
 
         if (!isPasswordValid) {
+          await recordPersistentFailedAttempt({
+            action: "PASSWORD_LOGIN",
+            identifier: normalizedEmail,
+          });
           return null;
         }
+
+        // Reset rate limit on successful password authentication
+        await resetPersistentRateLimit("PASSWORD_LOGIN", normalizedEmail);
 
         // An email/password account that is not verified cannot sign in
         if (!user.isEmailVerified) {
@@ -249,8 +290,9 @@ export const authOptions: AuthOptions = {
         const email = user.email?.toLowerCase().trim();
         if (!email) return false;
 
-        const googleEmailVerified = (profile as any)?.email_verified ?? true;
-        if (!googleEmailVerified) {
+        // Fail closed: google email must be strictly verified
+        const googleEmailVerified = (profile as any)?.email_verified;
+        if (googleEmailVerified !== true) {
           return "/login?error=GoogleEmailUnverified";
         }
 
@@ -293,14 +335,22 @@ export const authOptions: AuthOptions = {
             return "/login?error=AccountDeactivated";
           }
 
-          // If a password account exists with the same email, link Google login to it when Google reports the email verified, and sign the user in.
+          // If a password account exists with the same email, link Google login to it when Google reports the email verified.
+          // When linking Google to an unverified existing account, invalidate any existing passwordHash and pending verification codes first.
           if (!dbUser.googleId || dbUser.googleId !== account.providerAccountId) {
+            const wasUnverified = !dbUser.isEmailVerified;
+            if (wasUnverified) {
+              await (prisma as any).emailVerificationToken?.deleteMany({ where: { email } }).catch(() => {});
+              await (prisma as any).oTPRequest?.deleteMany({ where: { email } }).catch(() => {});
+            }
+
             dbUser = await prisma.user.update({
               where: { id: dbUser.id },
               data: {
                 googleId: account.providerAccountId,
                 isEmailVerified: true,
                 emailVerified: dbUser.emailVerified || new Date(),
+                ...(wasUnverified ? { passwordHash: null } : {}),
               },
               include: { caretakerProfile: true },
             });
@@ -323,8 +373,13 @@ export const authOptions: AuthOptions = {
       return true;
     },
     async jwt({ token, user, trigger, session, account }) {
+      if (!token.tokenId) {
+        token.tokenId = crypto.randomUUID();
+      }
+
       if (user) {
         token.id = user.id;
+        token.tokenId = user.tokenId || token.tokenId;
         token.role = user.role;
         token.avatarUrl = user.avatarUrl;
         token.phoneNumber = user.phoneNumber;
@@ -335,45 +390,59 @@ export const authOptions: AuthOptions = {
         token.needsProfileCompletion = user.needsProfileCompletion ?? false;
       }
 
-      if (token.email && (account?.provider === "google" || !token.role || (typeof token.id === "string" && token.id.length > 36))) {
+      // Re-read role, isActive and 2FA status from database on each protected request and token refresh.
+      // Browser must NEVER be able to set role, twoFactorVerified, twoFactorEnabled, etc.
+      if (token.id) {
         try {
           const dbUser = await prisma.user.findUnique({
-            where: { email: (token.email as string).toLowerCase().trim() },
+            where: { id: token.id as string },
             include: { caretakerProfile: true },
           });
-          if (dbUser) {
-            token.id = dbUser.id;
-            token.role = dbUser.role;
-            token.avatarUrl = dbUser.avatarUrl || (token.picture as string | null);
-            token.phoneNumber = dbUser.phoneNumber;
-            token.twoFactorEnabled = dbUser.twoFactorEnabled;
-            token.twoFactorVerified = dbUser.role === "SENIOR";
-            token.twoFactorPendingSetup = dbUser.role !== "SENIOR" && !dbUser.twoFactorEnabled;
-            token.isEmailVerified = true;
-            token.needsProfileCompletion =
-              (dbUser.role === "CARETAKER" && !dbUser.caretakerProfile);
+
+          if (!dbUser || !dbUser.isActive) {
+            // Refuse and invalidate session if user does not exist or was deactivated
+            return null as any;
+          }
+
+          token.role = dbUser.role;
+          token.phoneNumber = dbUser.phoneNumber;
+          token.avatarUrl = dbUser.avatarUrl || (token.picture as string | null);
+          token.twoFactorEnabled = dbUser.twoFactorEnabled;
+          token.isEmailVerified = dbUser.isEmailVerified;
+
+          // 2FA status check server-side
+          if (dbUser.role === "SENIOR") {
+            token.twoFactorVerified = true;
+            token.twoFactorPendingSetup = false;
+          } else {
+            const server2FA = await checkServerTwoFactorStatus(dbUser.id, token.tokenId as string);
+            token.twoFactorVerified = server2FA.isVerified;
+            token.twoFactorPendingSetup = !dbUser.twoFactorEnabled;
+          }
+
+          // Caretaker profile & verification status
+          if (dbUser.role === "CARETAKER") {
+            token.needsProfileCompletion = !dbUser.caretakerProfile;
+            token.caretakerStatus = dbUser.caretakerProfile?.status || null;
+          } else {
+            token.needsProfileCompletion = false;
+            token.caretakerStatus = null;
           }
         } catch (e) {
-          console.error("[JWT Callback Google User Lookup Error]:", e);
+          console.error("[JWT Re-verification Error]:", e);
         }
       }
 
+      // Remove client trust: Client-supplied "update" trigger NEVER modifies security flags
       if (trigger === "update" && session) {
-        if (session.twoFactorVerified !== undefined) {
-          token.twoFactorVerified = session.twoFactorVerified;
+        if (typeof session.name === "string") {
+          token.name = session.name;
         }
-        if (session.twoFactorEnabled !== undefined) {
-          token.twoFactorEnabled = session.twoFactorEnabled;
+        if (typeof session.avatarUrl === "string") {
+          token.avatarUrl = session.avatarUrl;
         }
-        if (session.twoFactorPendingSetup !== undefined) {
-          token.twoFactorPendingSetup = session.twoFactorPendingSetup;
-        }
-        if (session.role) {
-          token.role = session.role;
-        }
-        if (session.needsProfileCompletion !== undefined) {
-          token.needsProfileCompletion = session.needsProfileCompletion;
-        }
+        // role, twoFactorVerified, twoFactorEnabled, twoFactorPendingSetup, needsProfileCompletion
+        // are strictly ignored from client session input.
       }
 
       return token;
@@ -384,8 +453,9 @@ export const authOptions: AuthOptions = {
       return baseUrl;
     },
     async session({ session, token }) {
-      if (session.user) {
+      if (session.user && token) {
         session.user.id = token.id;
+        session.user.tokenId = token.tokenId;
         session.user.role = token.role;
         session.user.avatarUrl = token.avatarUrl;
         session.user.phoneNumber = token.phoneNumber;
@@ -394,9 +464,10 @@ export const authOptions: AuthOptions = {
         session.user.twoFactorPendingSetup = token.twoFactorPendingSetup;
         session.user.isEmailVerified = token.isEmailVerified;
         session.user.needsProfileCompletion = token.needsProfileCompletion;
+        session.user.caretakerStatus = token.caretakerStatus;
       }
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET || "carenest-hackathon-jwt-secret-default-key-2026",
+  secret: getNextAuthSecret(),
 };

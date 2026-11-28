@@ -10,6 +10,7 @@ import {
   LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DemoNavButton } from "@/demo/demo-dialog";
 
 interface NotificationItem {
   id: string;
@@ -351,6 +352,7 @@ export function Navbar({
             </div>
           ) : (
             <div className="flex items-center space-x-2">
+              <DemoNavButton />
               <Link href="/login">
                 <Button variant="outline" size="sm" className="font-semibold">
                   Sign In

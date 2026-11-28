@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/session";
 import { verifyProfileAccess } from "@/lib/permissions";
 import { CareTaskCreateSchema } from "@/lib/validations";
 import { prisma } from "@/lib/prisma";
+import { createDailyTask, getPatientTasksWithHistory } from "@/lib/services/task-service";
 
 export async function GET(req: Request) {
   const user = await getCurrentUser();
@@ -12,14 +13,21 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const profileId = searchParams.get("profileId");
+  const withHistory = searchParams.get("withHistory") === "true";
 
   if (!profileId) {
-    // If no profileId provided, fetch all tasks assigned to current caretaker
+    // If no profileId provided, fetch all tasks assigned to or by current caretaker
     const tasks = await prisma.careTask.findMany({
-      where: { assignedToId: user.id },
+      where: {
+        OR: [
+          { assignedToId: user.id },
+          { assignedById: user.id },
+        ],
+      },
       include: {
-        elderlyProfile: { select: { id: true, name: true, preferredName: true, avatarUrl: true } },
+        elderlyProfile: { select: { id: true, name: true, preferredName: true, avatarUrl: true, patientCode: true } },
         completedBy: { select: { id: true, name: true } },
+        assignedBy: { select: { id: true, name: true } },
       },
       orderBy: { dueDate: "asc" },
     });
@@ -32,13 +40,24 @@ export async function GET(req: Request) {
   }
 
   try {
+    if (withHistory) {
+      const tasks = await getPatientTasksWithHistory(profileId);
+      return NextResponse.json({ tasks });
+    }
+
     const tasks = await prisma.careTask.findMany({
       where: { elderlyProfileId: profileId },
       include: {
         assignedTo: { select: { id: true, name: true, role: true, avatarUrl: true } },
+        assignedBy: { select: { id: true, name: true, role: true } },
         completedBy: { select: { id: true, name: true } },
+        completions: {
+          orderBy: { localDate: "desc" },
+          take: 7,
+          include: { completedByUser: { select: { id: true, name: true } } },
+        },
       },
-      orderBy: { dueDate: "asc" },
+      orderBy: { createdAt: "desc" },
     });
 
     return NextResponse.json({ tasks });
@@ -56,8 +75,32 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const validated = CareTaskCreateSchema.safeParse(body);
 
+    // Check if daily task creation format (F8)
+    if (body.taskType) {
+      if (user.role !== "CARETAKER" && user.role !== "ADMIN") {
+        return NextResponse.json(
+          { error: "Only caretakers and administrators can assign daily tasks" },
+          { status: 403 }
+        );
+      }
+      const task = await createDailyTask(user.id, {
+        elderlyProfileId: body.elderlyProfileId,
+        taskType: body.taskType,
+        title: body.title,
+        description: body.description,
+        priority: body.priority,
+        startDate: body.startDate || new Date().toISOString().split("T")[0],
+        durationDays: body.durationDays,
+        untilStopped: body.untilStopped,
+        timesOfDay: body.timesOfDay,
+        details: body.details,
+      });
+      return NextResponse.json({ task }, { status: 201 });
+    }
+
+    // Standard task creation
+    const validated = CareTaskCreateSchema.safeParse(body);
     if (!validated.success) {
       return NextResponse.json(
         { error: "Validation failed", details: validated.error.flatten() },
@@ -76,6 +119,7 @@ export async function POST(req: Request) {
         data: {
           elderlyProfileId: data.elderlyProfileId,
           assignedToId: data.assignedToId || null,
+          assignedById: user.id,
           title: data.title,
           description: data.description,
           dueDate: new Date(data.dueDate),
@@ -84,10 +128,10 @@ export async function POST(req: Request) {
         },
         include: {
           assignedTo: { select: { id: true, name: true, role: true } },
+          assignedBy: { select: { id: true, name: true, role: true } },
         },
       });
 
-      // Notification if assigned to someone else
       if (data.assignedToId && data.assignedToId !== user.id) {
         await tx.notification.create({
           data: {
@@ -118,6 +162,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ task }, { status: 201 });
   } catch (err: any) {
     console.error("[Task POST Error]:", err);
-    return NextResponse.json({ error: "Failed to create care task" }, { status: 500 });
+    return NextResponse.json({ error: err.message || "Failed to create care task" }, { status: 500 });
   }
 }

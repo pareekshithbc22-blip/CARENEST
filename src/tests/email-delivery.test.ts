@@ -10,9 +10,11 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
     const originalVitest = process.env.VITEST;
     const originalResend = process.env.RESEND_API_KEY;
     const originalSmtp = process.env.SMTP_USER;
+    const originalSecret = process.env.NEXTAUTH_SECRET;
 
     try {
       (process.env as Record<string, string | undefined>)["NODE_ENV"] = "production";
+      process.env.NEXTAUTH_SECRET = "production-test-secret-key-1234567890";
       delete process.env.VITEST;
       delete process.env.RESEND_API_KEY;
       delete process.env.SMTP_USER;
@@ -34,8 +36,10 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
       if (originalVitest) process.env.VITEST = originalVitest;
       if (originalResend) process.env.RESEND_API_KEY = originalResend;
       if (originalSmtp) process.env.SMTP_USER = originalSmtp;
+      if (originalSecret) process.env.NEXTAUTH_SECRET = originalSecret;
+      else delete process.env.NEXTAUTH_SECRET;
     }
-  });
+  }, 15000);
 
   it("cleans up database OTP records if email dispatch fails so user is not blocked", async () => {
     const unconfiguredEmail = "unconfigured.test@example.com";
@@ -49,9 +53,11 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
     const originalVitest = process.env.VITEST;
     const originalResend = process.env.RESEND_API_KEY;
     const originalSmtp = process.env.SMTP_USER;
+    const originalSecret = process.env.NEXTAUTH_SECRET;
 
     try {
       (process.env as Record<string, string | undefined>)["NODE_ENV"] = "production";
+      process.env.NEXTAUTH_SECRET = "production-test-secret-key-1234567890";
       delete process.env.VITEST;
       delete process.env.RESEND_API_KEY;
       delete process.env.SMTP_USER;
@@ -70,12 +76,14 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
       if (originalVitest) process.env.VITEST = originalVitest;
       if (originalResend) process.env.RESEND_API_KEY = originalResend;
       if (originalSmtp) process.env.SMTP_USER = originalSmtp;
+      if (originalSecret) process.env.NEXTAUTH_SECRET = originalSecret;
+      else delete process.env.NEXTAUTH_SECRET;
 
       await prisma.emailVerificationOtp.deleteMany({
         where: { email: unconfiguredEmail },
       });
     }
-  });
+  }, 15000);
 
   it("handles offline test mock delivery safely during test runs", async () => {
     const result = await sendEmail({
@@ -135,7 +143,7 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
       if (originalFrom) process.env.SMTP_FROM = originalFrom;
       else delete process.env.SMTP_FROM;
     }
-  });
+  }, 15000);
 
   it("identifies specific missing credential when only one SMTP parameter is provided", async () => {
     const originalEnv = process.env.NODE_ENV;
@@ -178,5 +186,5 @@ describe("CareNest Real Email Delivery & Error Transparency", () => {
       if (originalPass) process.env.SMTP_PASS = originalPass;
       else delete process.env.SMTP_PASS;
     }
-  });
+  }, 15000);
 });

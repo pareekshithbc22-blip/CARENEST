@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/session";
 import { verifyProfileAccess } from "@/lib/permissions";
 import { MedicationCreateSchema } from "@/lib/validations";
 import { prisma } from "@/lib/prisma";
+import { prescribeMedication } from "@/lib/services/medication-service";
 
 export async function GET(req: Request) {
   const user = await getCurrentUser();
@@ -63,6 +64,23 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
+
+    // Support direct caretaker prescription flow (F6)
+    if (body.strengthNumber !== undefined && body.reason) {
+      const times = Array.isArray(body.times) ? body.times : Array.isArray(body.timesOfDay) ? body.timesOfDay : ["08:00"];
+      const newPrescription = await prescribeMedication(user.id, {
+        elderlyProfileId: body.elderlyProfileId,
+        name: body.name,
+        strengthNumber: Number(body.strengthNumber),
+        strengthUnit: body.strengthUnit || "mg",
+        form: (body.form || "tablet").toLowerCase() as any,
+        times,
+        durationDays: Number(body.durationDays || 30),
+        reason: body.reason,
+      });
+      return NextResponse.json({ medication: newPrescription }, { status: 201 });
+    }
+
     const validated = MedicationCreateSchema.safeParse(body);
 
     if (!validated.success) {

@@ -1,43 +1,22 @@
 import crypto from "crypto";
 import { prisma } from "./prisma";
 import { sendOtpVerificationEmail, getSmtpConfigStatus } from "./email/service";
+import { getNextAuthSecret } from "./security";
+import {
+  checkPersistentRateLimit,
+  recordPersistentFailedAttempt,
+  resetPersistentRateLimit,
+} from "./services/rate-limit-service";
 
 const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
 const RESEND_COOLDOWN_MS = 60 * 1000; // 60 seconds
 const MAX_ATTEMPTS = 5; // Max 5 verification attempts before invalidating
 
-// In-memory rate limiting buckets
-interface RateLimitBucket {
-  count: number;
-  resetAt: number;
-}
-const emailRateLimit = new Map<string, RateLimitBucket>();
-const ipRateLimit = new Map<string, RateLimitBucket>();
-
-function checkRateLimit(
-  map: Map<string, RateLimitBucket>,
-  key: string,
-  maxRequests: number,
-  windowMs: number
-): boolean {
-  const now = Date.now();
-  const bucket = map.get(key);
-  if (!bucket || bucket.resetAt <= now) {
-    map.set(key, { count: 1, resetAt: now + windowMs });
-    return true;
-  }
-  if (bucket.count >= maxRequests) {
-    return false;
-  }
-  bucket.count += 1;
-  return true;
-}
-
 /**
  * Returns secret key for hashing and signing
  */
 function getSecret(): string {
-  return process.env.NEXTAUTH_SECRET || "carenest-hackathon-production-jwt-encryption-key-2026-secure";
+  return getNextAuthSecret();
 }
 
 /**
@@ -125,25 +104,21 @@ export async function requestEmailOtp(
 ): Promise<SendOtpResult> {
   const normalizedEmail = email.toLowerCase().trim();
 
-  // Rate limit checks: per-email and per-IP (10-minute sliding window)
-  const isAllowedEmail = checkRateLimit(emailRateLimit, normalizedEmail, 5, 10 * 60 * 1000);
-  if (!isAllowedEmail) {
+  // Persistent database-backed rate limit check
+  const rateLimitStatus = await checkPersistentRateLimit({
+    action: "EMAIL_OTP",
+    identifier: normalizedEmail,
+    ip,
+  });
+
+  if (!rateLimitStatus.allowed) {
     return {
       success: false,
-      error: "Too many verification attempts for this email address. Please try again in 10 minutes.",
+      error: `Too many verification requests. Please try again in ${Math.ceil(
+        (rateLimitStatus.remainingSeconds || 600) / 60
+      )} minutes.`,
       cooldownSeconds: 60,
     };
-  }
-
-  if (ip) {
-    const isAllowedIp = checkRateLimit(ipRateLimit, ip, 10, 10 * 60 * 1000);
-    if (!isAllowedIp) {
-      return {
-        success: false,
-        error: "Too many verification requests from this IP address. Please wait before trying again.",
-        cooldownSeconds: 60,
-      };
-    }
   }
 
   // Check if an existing unexpired OTP is within cooldown window (60 seconds)
@@ -322,6 +297,11 @@ export async function verifyEmailOtp(email: string, enteredOtp: string): Promise
       data: { attempts: updatedAttempts },
     });
 
+    await recordPersistentFailedAttempt({
+      action: "EMAIL_OTP",
+      identifier: normalizedEmail,
+    });
+
     return {
       success: false,
       error: `Incorrect verification code. ${remaining} ${remaining === 1 ? "attempt" : "attempts"} remaining.`,
@@ -331,6 +311,9 @@ export async function verifyEmailOtp(email: string, enteredOtp: string): Promise
 
   // Success: Delete OTP immediately so it can NEVER be reused (single-use guarantee)
   await prisma.emailVerificationOtp.delete({ where: { email: normalizedEmail } }).catch(() => {});
+
+  // Reset persistent rate limit on successful verification
+  await resetPersistentRateLimit("EMAIL_OTP", normalizedEmail);
 
   // Mark user account verified in database
   await prisma.user.updateMany({

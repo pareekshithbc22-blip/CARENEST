@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
-import path from "path";
-import fs from "fs";
 import { getCurrentUser } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { getFileStorage } from "@/lib/verification/storage";
 
 export async function GET(
   req: Request,
@@ -40,27 +39,21 @@ export async function GET(
       );
     }
 
-    // Resolve secure file path and prevent directory traversal
-    const baseSecureDir = path.resolve(process.cwd(), "storage", "secure_documents");
-    const targetFilePath = path.resolve(process.cwd(), profile.documentFilePath);
+    const storage = getFileStorage();
 
-    if (!targetFilePath.startsWith(baseSecureDir)) {
-      return NextResponse.json(
-        { error: "Security violation: Invalid storage path reference" },
-        { status: 403 }
-      );
+    // If S3, redirect directly to temporary signed URL
+    if (profile.documentFilePath.startsWith("s3://")) {
+      const signedUrl = await storage.getSignedUrl(profile.documentFilePath, 300);
+      return NextResponse.redirect(signedUrl);
     }
 
-    if (!fs.existsSync(targetFilePath)) {
-      return NextResponse.json({ error: "Document file missing from secure storage" }, { status: 404 });
-    }
+    // Local storage
+    const fileBuffer = await storage.getFile(profile.documentFilePath);
 
-    const fileBuffer = fs.readFileSync(targetFilePath);
-
-    return new NextResponse(fileBuffer, {
+    return new NextResponse(new Uint8Array(fileBuffer), {
       headers: {
         "Content-Type": profile.documentMimeType || "application/pdf",
-        "Content-Disposition": `inline; filename="${profile.documentFileName}"`,
+        "Content-Disposition": `inline; filename="${encodeURIComponent(profile.documentFileName)}"`,
         "Cache-Control": "private, no-cache, no-store, must-revalidate",
       },
     });

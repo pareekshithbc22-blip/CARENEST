@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import QRCode from "qrcode";
+import { getNextAuthSecret } from "./security";
 
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const TOTP_STEP_SECONDS = 30;
@@ -69,7 +70,7 @@ export function base32Decode(str: string): Buffer {
  * Generates an encryption key from application secret
  */
 function getEncryptionKey(): Buffer {
-  const secret = process.env.NEXTAUTH_SECRET || "carenest-hackathon-production-jwt-encryption-key-2026-secure";
+  const secret = getNextAuthSecret();
   return crypto.createHash("sha256").update(secret).digest();
 }
 

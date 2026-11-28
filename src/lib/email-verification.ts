@@ -2,11 +2,12 @@ import crypto from "crypto";
 import { prisma } from "./prisma";
 import { sendVerificationLinkEmail, EmailResult } from "./email/service";
 import { getAppUrl } from "./config";
+import { getNextAuthSecret } from "./security";
 
 const TOKEN_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 function getSecret(): string {
-  return process.env.NEXTAUTH_SECRET || "carenest-hackathon-production-jwt-encryption-key-2026-secure";
+  return getNextAuthSecret();
 }
 
 /**

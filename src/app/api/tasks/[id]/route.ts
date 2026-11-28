@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { verifyProfileAccess } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { completeTaskBySenior } from "@/lib/services/task-service";
 
 export async function PATCH(
   req: Request,
@@ -27,17 +28,29 @@ export async function PATCH(
     const body = await req.json();
     const isCompleting = body.status === "COMPLETED";
 
+    // F9: Task completion belongs to Senior only
+    if (isCompleting) {
+      if (user.role !== "SENIOR") {
+        return NextResponse.json(
+          { error: "Task completion is restricted to Senior Patients only. Caretakers and Family Administrators have read-only access." },
+          { status: 403 }
+        );
+      }
+
+      const result = await completeTaskBySenior(user.id, user.role, id, body.targetDateStr);
+      return NextResponse.json({ task: result.task, completion: result.completion });
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
       const res = await tx.careTask.update({
         where: { id },
         data: {
           status: body.status ?? task.status,
           notes: body.notes !== undefined ? body.notes : task.notes,
-          completedAt: isCompleting ? new Date() : (body.status === "PENDING" ? null : task.completedAt),
-          completedById: isCompleting ? user.id : (body.status === "PENDING" ? null : task.completedById),
         },
         include: {
           assignedTo: { select: { id: true, name: true, role: true } },
+          assignedBy: { select: { id: true, name: true, role: true } },
           completedBy: { select: { id: true, name: true, role: true } },
         },
       });
@@ -46,7 +59,7 @@ export async function PATCH(
         data: {
           elderlyProfileId: task.elderlyProfileId,
           userId: user.id,
-          action: isCompleting ? "CARE_TASK_COMPLETED" : "CARE_TASK_UPDATED",
+          action: "CARE_TASK_UPDATED",
           entityType: "CareTask",
           entityId: id,
           details: { status: res.status, title: res.title },
@@ -59,6 +72,9 @@ export async function PATCH(
     return NextResponse.json({ task: updated });
   } catch (err: any) {
     console.error("[Task PATCH Error]:", err);
-    return NextResponse.json({ error: "Failed to update task" }, { status: 500 });
+    return NextResponse.json(
+      { error: err.message || "Failed to update task" },
+      { status: err.statusCode || 500 }
+    );
   }
 }

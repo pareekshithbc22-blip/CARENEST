@@ -91,6 +91,12 @@ export function SeniorDashboardClient({
 }: SeniorDashboardClientProps) {
   const [activeTab, setActiveTab] = React.useState<SeniorNavTab>("overview");
   const [doses, setDoses] = React.useState<DoseItem[]>(initialDoses);
+  const [tasks, setTasks] = React.useState<any[]>([]);
+  const [completingTaskId, setCompletingTaskId] = React.useState<string | null>(null);
+  const [medsList, setMedsList] = React.useState<PrescribedMedicine[]>(allMedications);
+  const [editingStockMedId, setEditingStockMedId] = React.useState<string | null>(null);
+  const [stockInputVal, setStockInputVal] = React.useState<string>("");
+  const [savingStock, setSavingStock] = React.useState(false);
   const [confirmingId, setConfirmingId] = React.useState<string | null>(null);
   const [skippingDoseId, setSkippingDoseId] = React.useState<string | null>(null);
   const [skipReason, setSkipReason] = React.useState<string>("Physician advised / feeling unwell");
@@ -109,12 +115,78 @@ export function SeniorDashboardClient({
     }
   }, [initialProfile.id]);
 
+  const loadTasks = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/tasks?profileId=${encodeURIComponent(initialProfile.id)}&withHistory=true`);
+      if (res.ok) {
+        const data = await res.json();
+        setTasks(data.tasks || []);
+      }
+    } catch (e) {
+      console.warn("Failed to reload senior tasks", e);
+    }
+  }, [initialProfile.id]);
+
   const { lastUpdated, isRefreshing, refreshNow } = useDashboardPolling({
     role: "senior",
     onUpdate: () => {
       loadDoses();
+      loadTasks();
     },
   });
+
+  React.useEffect(() => {
+    loadTasks();
+  }, [loadTasks]);
+
+  const handleCompleteTask = async (taskId: string) => {
+    setCompletingTaskId(taskId);
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/complete`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        setSuccessBanner("Great job! You completed your daily task. Your family and caretaker have been notified.");
+        setTimeout(() => setSuccessBanner(null), 6000);
+        loadTasks();
+      } else {
+        const err = await res.json();
+        alert(err.error || "Failed to complete task.");
+      }
+    } catch {
+      alert("Network error while completing task.");
+    } finally {
+      setCompletingTaskId(null);
+    }
+  };
+
+  const handleSaveStock = async (medId: string) => {
+    const parsed = parseInt(stockInputVal, 10);
+    const clamped = isNaN(parsed) ? 0 : Math.max(0, Math.min(999, parsed));
+    setSavingStock(true);
+    try {
+      const res = await fetch(`/api/medications/${medId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stockCount: clamped }),
+      });
+      if (res.ok) {
+        setMedsList((prev) =>
+          prev.map((m) => (m.id === medId ? { ...m, stockCount: clamped } : m))
+        );
+        setEditingStockMedId(null);
+        setSuccessBanner(`Medication stock updated to ${clamped} doses.`);
+        setTimeout(() => setSuccessBanner(null), 5000);
+      } else {
+        const err = await res.json();
+        alert(err.error || "Failed to update stock count.");
+      }
+    } catch {
+      alert("Network error while updating stock.");
+    } finally {
+      setSavingStock(false);
+    }
+  };
 
   // Dose Confirmation Handler
   const handleConfirmDose = async (doseId: string, medName?: string) => {
@@ -576,6 +648,73 @@ export function SeniorDashboardClient({
                 </div>
               )}
             </section>
+
+            {/* Daily Care Tasks for Senior (F9) */}
+            <section className="space-y-4 pt-4 border-t-2 border-slate-200">
+              <div>
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight">
+                  Today&apos;s Daily Tasks
+                </h2>
+                <p className="text-sm font-semibold text-slate-600">
+                  Tasks assigned by your caretaker. Tap the button when you finish each task.
+                </p>
+              </div>
+
+              {tasks.length === 0 ? (
+                <div className="rounded-3xl border-2 border-dashed border-slate-300 bg-white p-8 text-center">
+                  <p className="text-base font-bold text-slate-600">
+                    No daily care tasks assigned for today.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {tasks.map((task) => {
+                    const isDone = task.isCompleted;
+                    return (
+                      <div
+                        key={task.id}
+                        className={`rounded-3xl border-3 p-6 transition-all shadow-sm ${
+                          isDone
+                            ? "border-emerald-300 bg-emerald-50/60"
+                            : "border-slate-300 bg-white hover:border-teal-500"
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                          <div className="space-y-1">
+                            <h3 className="text-2xl font-black text-slate-900">
+                              {task.title}
+                            </h3>
+                            {task.description && (
+                              <p className="text-sm text-slate-700 font-medium">
+                                {task.description}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="sm:self-center">
+                            {isDone ? (
+                              <div className="flex items-center space-x-2 text-emerald-800 font-extrabold text-sm bg-emerald-100 rounded-2xl px-6 py-4 border-2 border-emerald-400">
+                                <Check className="h-6 w-6 stroke-3" />
+                                <span className="text-base">Completed Today</span>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleCompleteTask(task.id)}
+                                disabled={completingTaskId === task.id}
+                                className="h-16 px-8 rounded-2xl bg-teal-700 hover:bg-teal-800 text-white font-black text-lg shadow-lg active:scale-95 transition-all"
+                              >
+                                {completingTaskId === task.id ? "Recording..." : "Mark as Completed"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
           </div>
         )}
 
@@ -602,30 +741,81 @@ export function SeniorDashboardClient({
             </div>
 
             <div className="space-y-4">
-              {allMedications.length === 0 ? (
+              {medsList.length === 0 ? (
                 <div className="rounded-3xl border-2 border-dashed border-slate-300 bg-white p-12 text-center">
                   <p className="text-base font-bold text-slate-600">
                     No medications registered yet.
                   </p>
                 </div>
               ) : (
-                allMedications.map((med) => (
-                  <div key={med.id} className="rounded-3xl border-2 border-slate-200 bg-white p-6 shadow-xs">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div>
-                        <h3 className="text-xl font-black text-slate-900">{med.name}</h3>
-                        <p className="text-sm font-bold text-teal-800">{med.strength} • {med.form}</p>
-                        <p className="text-xs text-slate-600 mt-1">{med.dosageInstructions}</p>
-                      </div>
-                      {med.stockCount !== undefined && (
-                        <div className="text-right">
-                          <span className="text-xs text-slate-500 block">Stock Remaining</span>
-                          <span className="text-lg font-black text-slate-800">{med.stockCount} doses</span>
+                medsList.map((med) => {
+                  const stockVal = med.stockCount ?? 0;
+                  const isEditing = editingStockMedId === med.id;
+                  const isLow = stockVal <= 5;
+
+                  return (
+                    <div key={med.id} className="rounded-3xl border-2 border-slate-200 bg-white p-6 shadow-xs space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-xl font-black text-slate-900">{med.name}</h3>
+                            {isLow && (
+                              <Badge className="bg-rose-100 text-rose-800 border-rose-300 text-xs">Low Stock</Badge>
+                            )}
+                          </div>
+                          <p className="text-sm font-bold text-teal-800">{med.strength} • {med.form}</p>
+                          <p className="text-xs text-slate-600 mt-1">{med.dosageInstructions}</p>
                         </div>
-                      )}
+
+                        <div className="flex items-center gap-3 self-start sm:self-auto">
+                          <div className="text-right">
+                            <span className="text-xs text-slate-500 block">Stock Remaining</span>
+                            <span className="text-lg font-black text-slate-800">{stockVal} doses</span>
+                          </div>
+
+                          {!isEditing ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingStockMedId(med.id);
+                                setStockInputVal(String(stockVal));
+                              }}
+                              className="px-3 py-1.5 rounded-xl border border-slate-300 hover:bg-slate-50 text-xs font-bold text-slate-700"
+                            >
+                              Update stock
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                              <input
+                                type="number"
+                                min={0}
+                                max={999}
+                                value={stockInputVal}
+                                onChange={(e) => setStockInputVal(e.target.value)}
+                                className="w-16 h-8 text-center font-bold text-sm bg-white border rounded-lg"
+                              />
+                              <button
+                                type="button"
+                                disabled={savingStock}
+                                onClick={() => handleSaveStock(med.id)}
+                                className="px-2.5 py-1 rounded-lg bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs"
+                              >
+                                {savingStock ? "..." : "Save"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingStockMedId(null)}
+                                className="px-2 py-1 text-xs text-slate-500 hover:text-slate-700"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </section>

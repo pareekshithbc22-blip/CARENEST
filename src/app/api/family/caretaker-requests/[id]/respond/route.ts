@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser } from "@/lib/session";
 import { prisma } from "@/lib/prisma";
+import { respondToCaretakerRequest } from "@/lib/services/access-request-service";
 
 const RespondSchema = z.object({
-  action: z.enum(["APPROVE", "REJECT"]),
+  action: z.enum(["APPROVE", "REJECT", "ACCEPT"]),
   rejectionReason: z.string().optional(),
 });
 
@@ -16,10 +17,6 @@ export async function POST(
     const user = await getCurrentUser();
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    if (user.role !== "FAMILY" && user.role !== "ADMIN") {
-      return NextResponse.json({ error: "Only family administrators can respond to caretaker requests" }, { status: 403 });
     }
 
     const { id: requestId } = await params;
@@ -34,6 +31,22 @@ export async function POST(
     }
 
     const { action, rejectionReason } = validated.data;
+
+    // If caller is caretaker, dispatch to caretaker response service
+    if (user.role === "CARETAKER") {
+      const normAction = action === "REJECT" ? "REJECT" : "ACCEPT";
+      const result = await respondToCaretakerRequest(
+        requestId,
+        user.id,
+        normAction,
+        rejectionReason
+      );
+      return NextResponse.json(result);
+    }
+
+    if (user.role !== "FAMILY" && user.role !== "ADMIN") {
+      return NextResponse.json({ error: "Only authorized roles can respond to requests" }, { status: 403 });
+    }
 
     const request = await prisma.patientAccessRequest.findUnique({
       where: { id: requestId },

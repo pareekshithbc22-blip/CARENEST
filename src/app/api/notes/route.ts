@@ -3,6 +3,7 @@ import { getCurrentUser } from "@/lib/session";
 import { verifyProfileAccess } from "@/lib/permissions";
 import { CareNoteCreateSchema } from "@/lib/validations";
 import { prisma } from "@/lib/prisma";
+import { publishCareNote } from "@/lib/services/care-note-service";
 
 export async function GET(req: Request) {
   const user = await getCurrentUser();
@@ -47,8 +48,32 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const validated = CareNoteCreateSchema.safeParse(body);
 
+    // Check if Health Condition Update format (F10)
+    if (body.overallCondition || (body.category === "HEALTH_UPDATE" && body.observations)) {
+      if (user.role !== "CARETAKER" && user.role !== "ADMIN") {
+        return NextResponse.json(
+          { error: "Only caretakers and administrators can record health condition updates" },
+          { status: 403 }
+        );
+      }
+      const note = await publishCareNote(user.id, {
+        elderlyProfileId: body.elderlyProfileId,
+        overallCondition: body.overallCondition || "STABLE",
+        observations: body.observations || body.content,
+        quickFields: body.quickFields || {
+          appetite: body.appetite,
+          mood: body.mood,
+          sleepQuality: body.sleepQuality,
+          painLevel: body.painLevel,
+          mobility: body.mobility,
+        },
+      });
+      return NextResponse.json({ note }, { status: 201 });
+    }
+
+    // Standard care note
+    const validated = CareNoteCreateSchema.safeParse(body);
     if (!validated.success) {
       return NextResponse.json(
         { error: "Validation failed", details: validated.error.flatten() },
@@ -80,7 +105,6 @@ export async function POST(req: Request) {
         },
       });
 
-      // If handover note to someone, send notification
       if (data.shiftHandoverToId && data.shiftHandoverToId !== user.id) {
         await tx.notification.create({
           data: {
@@ -111,6 +135,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ note }, { status: 201 });
   } catch (err: any) {
     console.error("[Note POST Error]:", err);
-    return NextResponse.json({ error: "Failed to record care note" }, { status: 500 });
+    return NextResponse.json({ error: err.message || "Failed to record care note" }, { status: 500 });
   }
 }

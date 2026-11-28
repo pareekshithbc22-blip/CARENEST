@@ -28,7 +28,10 @@ export async function getAuthorizedProfiles(userId: string) {
       select: { status: true },
     });
     // Unapproved caretakers have zero access to patient medical records
-    if (!caretakerProfile || caretakerProfile.status !== "APPROVED") {
+    const isApproved =
+      caretakerProfile?.status === "APPROVED" ||
+      (caretakerProfile?.status as any) === "AUTO_APPROVED";
+    if (!isApproved) {
       return [];
     }
   }
@@ -156,7 +159,10 @@ export async function verifyProfileAccess(
       select: { status: true },
     });
 
-    if (!caretakerProfile || caretakerProfile.status !== "APPROVED") {
+    const isApproved =
+      caretakerProfile?.status === "APPROVED" ||
+      (caretakerProfile?.status as any) === "AUTO_APPROVED";
+    if (!isApproved) {
       return {
         authorized: false,
         reason: "CARETAKER_VERIFICATION_REQUIRED",

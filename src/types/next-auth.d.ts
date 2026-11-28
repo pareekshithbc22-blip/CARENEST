@@ -4,6 +4,7 @@ declare module "next-auth" {
   interface Session {
     user: {
       id: string;
+      tokenId?: string | null;
       role: "SENIOR" | "FAMILY" | "CARETAKER" | "ADMIN";
       phoneNumber?: string | null;
       avatarUrl?: string | null;
@@ -13,11 +14,13 @@ declare module "next-auth" {
       googleId?: string | null;
       isEmailVerified?: boolean;
       needsProfileCompletion?: boolean;
+      caretakerStatus?: string | null;
     } & DefaultSession["user"];
   }
 
   interface User extends DefaultUser {
     id: string;
+    tokenId?: string | null;
     role: "SENIOR" | "FAMILY" | "CARETAKER" | "ADMIN";
     phoneNumber?: string | null;
     avatarUrl?: string | null;
@@ -27,12 +30,14 @@ declare module "next-auth" {
     googleId?: string | null;
     isEmailVerified?: boolean;
     needsProfileCompletion?: boolean;
+    caretakerStatus?: string | null;
   }
 }
 
 declare module "next-auth/jwt" {
   interface JWT {
     id: string;
+    tokenId?: string | null;
     role: "SENIOR" | "FAMILY" | "CARETAKER" | "ADMIN";
     phoneNumber?: string | null;
     avatarUrl?: string | null;
@@ -42,5 +47,6 @@ declare module "next-auth/jwt" {
     googleId?: string | null;
     isEmailVerified?: boolean;
     needsProfileCompletion?: boolean;
+    caretakerStatus?: string | null;
   }
 }

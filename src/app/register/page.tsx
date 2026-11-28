@@ -21,6 +21,8 @@ import {
   ArrowRight,
   ArrowLeft,
   Loader2,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +38,7 @@ export default function RegisterPage() {
   const [name, setName] = React.useState("");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
   const [role, setRole] = React.useState("FAMILY");
   const [phoneNumber, setPhoneNumber] = React.useState("");
 
@@ -188,12 +191,21 @@ export default function RegisterPage() {
       let uploadedDocData = null;
       if (role === "CARETAKER" && selectedFile) {
         setLoadingStage("Encrypting & storing certificate in vault...");
+        
+        // Fetch short-lived upload token
+        const tokenRes = await fetch("/api/auth/upload-token").catch(() => null);
+        const tokenJson = tokenRes ? await tokenRes.json().catch(() => null) : null;
+
         const uploadForm = new FormData();
         uploadForm.append("file", selectedFile);
+        if (tokenJson?.token) {
+          uploadForm.append("uploadToken", tokenJson.token);
+        }
 
         const uploadRes = await fetch("/api/caretakers/upload-document", {
           method: "POST",
           body: uploadForm,
+          headers: tokenJson?.token ? { "x-upload-token": tokenJson.token } : {},
         });
 
         const uploadJson = await uploadRes.json();
@@ -242,6 +254,7 @@ export default function RegisterPage() {
       setOtpSentNotice(`Verification code sent to ${email.trim()}.`);
       setStep("otp");
     } catch (err: any) {
+      setShowPassword(false);
       setError(err.message || "Failed to register account.");
     } finally {
       setLoading(false);
@@ -676,14 +689,23 @@ export default function RegisterPage() {
                     <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
                     <Input
                       id="password"
-                      type="password"
+                      type={showPassword ? "text" : "password"}
                       required
                       minLength={8}
                       placeholder="••••••••••••"
-                      className="pl-9"
+                      className="pl-9 pr-10"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded p-0.5"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
                 </div>
 

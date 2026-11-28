@@ -19,6 +19,15 @@ import {
   X,
   RefreshCw,
   Users,
+  Footprints,
+  Moon,
+  Droplets,
+  Utensils,
+  HeartPulse,
+  Info,
+  ChevronRight,
+  Eye,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,13 +35,16 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { CaretakerPatientMonitor } from "@/components/caretaker/caretaker-patient-monitor";
 import { useDashboardPolling } from "@/hooks/use-dashboard-polling";
+import { LiveVitalCharts, TimeRange } from "@/components/charts/live-vital-charts";
+import { getSuggestedTaskValues } from "@/lib/domain/task-suggestions";
+import { CaretakerVerificationTracker } from "@/components/caretaker/caretaker-verification-tracker";
 
 export interface PatientSummary {
   id: string;
   name: string;
   preferredName?: string | null;
+  patientCode?: string | null;
   dateOfBirth?: string;
   emergencyContactName?: string;
   emergencyContactPhone?: string;
@@ -42,13 +54,14 @@ export interface PatientSummary {
   latestBloodPressure?: string | null;
   sugarSeverity?: "NORMAL" | "WARNING" | "CRITICAL";
   bpSeverity?: "NORMAL" | "WARNING" | "CRITICAL";
+  latestCondition?: string | null;
   doseProgress?: { taken: number; total: number };
   alertBadges?: string[];
 }
 
 export interface CaretakerProfileData {
   id: string;
-  status: "PENDING" | "UNDER_REVIEW" | "APPROVED" | "REJECTED";
+  status: "PENDING" | "UNDER_REVIEW" | "APPROVED" | "REJECTED" | "AUTO_APPROVED" | "AUTO_REJECTED" | "EXPIRED" | string;
   rejectionReason?: string | null;
   professionalCategory?: string | null;
   qualification?: string | null;
@@ -67,7 +80,7 @@ interface CaretakerDashboardClientProps {
   profiles: PatientSummary[];
 }
 
-type ClinicalTab = "medications" | "tasks" | "appointments" | "notes";
+type ClinicalTab = "telemetry" | "medications" | "tasks" | "appointments" | "notes";
 
 export function CaretakerDashboardClient({
   caretakerName,
@@ -85,14 +98,58 @@ export function CaretakerDashboardClient({
   const [selectedProfileId, setSelectedProfileId] = React.useState<string>(
     initialSelectedPatientId || profiles[0]?.id || ""
   );
-  const [activeTab, setActiveTab] = React.useState<ClinicalTab>("medications");
+  const [activeTab, setActiveTab] = React.useState<ClinicalTab>("telemetry");
 
-  // Automatic Polling for Role Caretaker (15s visible, 60s hidden with backoff)
+  // Incoming Patient Requests (F4)
+  const [incomingRequests, setIncomingRequests] = React.useState<any[]>([]);
+  const [loadingRequests, setLoadingRequests] = React.useState(false);
+  const [respondingReqId, setRespondingReqId] = React.useState<string | null>(null);
+  const [requestFeedback, setRequestFeedback] = React.useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  const loadIncomingRequests = React.useCallback(async () => {
+    setLoadingRequests(true);
+    try {
+      const res = await fetch("/api/caretakers/requests");
+      if (res.ok) {
+        const data = await res.json();
+        setIncomingRequests(data.requests || []);
+      }
+    } catch {
+      // quiet fail
+    } finally {
+      setLoadingRequests(false);
+    }
+  }, []);
+
+  // Telemetry Range & Data (F14)
+  const [telemetryRange, setTelemetryRange] = React.useState<TimeRange>("live");
+  const [telemetryReadings, setTelemetryReadings] = React.useState<any[]>([]);
+  const [loadingTelemetry, setLoadingTelemetry] = React.useState(false);
+
+  const loadTelemetry = React.useCallback(async (pid: string, range: TimeRange) => {
+    if (!pid) return;
+    setLoadingTelemetry(true);
+    try {
+      const res = await fetch(`/api/health-metrics/ranges?profileId=${encodeURIComponent(pid)}&range=${range}`);
+      if (res.ok) {
+        const data = await res.json();
+        setTelemetryReadings(data.readings || []);
+      }
+    } catch {
+      // quiet fail
+    } finally {
+      setLoadingTelemetry(false);
+    }
+  }, []);
+
+  // Automatic Polling
   const { lastUpdated, isRefreshing, refreshNow } = useDashboardPolling({
     role: "caretaker",
     onUpdate: () => {
+      loadIncomingRequests();
       if (selectedProfileId) {
         loadPatientData(selectedProfileId);
+        loadTelemetry(selectedProfileId, telemetryRange);
       }
     },
   });
@@ -111,16 +168,43 @@ export function CaretakerDashboardClient({
   const [patientNotes, setPatientNotes] = React.useState<any[]>(initialNotes);
   const [loadingNotes, setLoadingNotes] = React.useState(false);
 
-  // New Note / Vitals Form state
-  const [noteTitle, setNoteTitle] = React.useState("");
-  const [noteContent, setNoteContent] = React.useState("");
-  const [category, setCategory] = React.useState<string>("HEALTH_UPDATE");
+  // Prescribe Medicine Form state (F6)
+  const [showPrescribeForm, setShowPrescribeForm] = React.useState(false);
+  const [prescribeName, setPrescribeName] = React.useState("");
+  const [strengthNumber, setStrengthNumber] = React.useState<string>("500");
+  const [strengthUnit, setStrengthUnit] = React.useState<"mg" | "mcg" | "ml">("mg");
+  const [medForm, setMedForm] = React.useState<"tablet" | "capsule" | "syrup" | "drops">("tablet");
+  const [scheduleTimes, setScheduleTimes] = React.useState<string>("08:00, 20:00");
+  const [durationDays, setDurationDays] = React.useState<number>(30);
+  const [reason, setReason] = React.useState("");
+  const [initialStock, setInitialStock] = React.useState<number>(30);
+  const [savingPrescription, setSavingPrescription] = React.useState(false);
+  const [prescribeFeedback, setPrescribeFeedback] = React.useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  // Daily Tasks Form state (F8)
+  const [showTaskForm, setShowTaskForm] = React.useState(false);
+  const [selectedTaskType, setSelectedTaskType] = React.useState<string>("walking");
+  const [taskTitle, setTaskTitle] = React.useState("");
+  const [taskDescription, setTaskDescription] = React.useState("");
+  const [taskDurationDays, setTaskDurationDays] = React.useState<number | "everyday">("everyday");
+  const [taskPriority, setTaskPriority] = React.useState<"LOW" | "MEDIUM" | "HIGH" | "URGENT">("MEDIUM");
+  const [savingDailyTask, setSavingDailyTask] = React.useState(false);
+  const [taskFeedback, setTaskFeedback] = React.useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  // Health Condition Update Form state (F10)
+  const [noteCondition, setNoteCondition] = React.useState<"STABLE" | "IMPROVING" | "NEEDS_ATTENTION" | "CRITICAL">("STABLE");
+  const [noteObservations, setNoteObservations] = React.useState("");
+  const [appetite, setAppetite] = React.useState<string>("Good");
+  const [mood, setMood] = React.useState<string>("Cheerful");
+  const [sleepQuality, setSleepQuality] = React.useState<string>("Restful");
+  const [painLevel, setPainLevel] = React.useState<number>(0);
+  const [mobility, setMobility] = React.useState<string>("Independent");
   const [bp, setBp] = React.useState("120/80");
   const [pulse, setPulse] = React.useState("72");
   const [sugar, setSugar] = React.useState("110");
   const [temp, setTemp] = React.useState("98.6");
   const [savingNote, setSavingNote] = React.useState(false);
-  const [noteSuccess, setNoteSuccess] = React.useState(false);
+  const [noteFeedback, setNoteFeedback] = React.useState<{ type: "success" | "error"; message: string } | null>(null);
 
   // Discover Patients state
   const [discoverQuery, setDiscoverQuery] = React.useState("");
@@ -130,16 +214,21 @@ export function CaretakerDashboardClient({
   const [requestModalPatient, setRequestModalPatient] = React.useState<any | null>(null);
   const [requestNotes, setRequestNotes] = React.useState("");
   const [sendingRequest, setSendingRequest] = React.useState(false);
-  const [discoverFeedback, setDiscoverFeedback] = React.useState<{
-    type: "success" | "error";
-    message: string;
-  } | null>(null);
+  const [discoverFeedback, setDiscoverFeedback] = React.useState<{ type: "success" | "error"; message: string } | null>(null);
 
   const isApproved = !caretakerProfile || caretakerProfile.status === "APPROVED";
-
   const activePatient = profiles.find((p) => p.id === selectedProfileId) || profiles[0];
+  const patientCount = profiles.length;
+  const isAtMaxCapacity = patientCount >= 5;
 
-  // Fetch patient-specific clinical data in strict data isolation
+  // Derive patient age
+  const patientAge = React.useMemo(() => {
+    if (!activePatient?.dateOfBirth) return 72;
+    const diffMs = Date.now() - new Date(activePatient.dateOfBirth).getTime();
+    return Math.abs(new Date(diffMs).getUTCFullYear() - 1970);
+  }, [activePatient]);
+
+  // Load clinical data
   const loadPatientData = React.useCallback(async (pid: string) => {
     if (!pid) return;
     setLoadingDoses(true);
@@ -151,7 +240,7 @@ export function CaretakerDashboardClient({
       const [dosesRes, apptsRes, tasksRes, notesRes] = await Promise.all([
         fetch(`/api/doses?profileId=${encodeURIComponent(pid)}&filter=today`),
         fetch(`/api/appointments?profileId=${encodeURIComponent(pid)}`),
-        fetch(`/api/tasks?profileId=${encodeURIComponent(pid)}`),
+        fetch(`/api/tasks?profileId=${encodeURIComponent(pid)}&withHistory=true`),
         fetch(`/api/notes?profileId=${encodeURIComponent(pid)}`),
       ]);
 
@@ -182,63 +271,234 @@ export function CaretakerDashboardClient({
   }, []);
 
   React.useEffect(() => {
+    loadIncomingRequests();
+  }, [loadIncomingRequests]);
+
+  React.useEffect(() => {
     if (selectedProfileId) {
       loadPatientData(selectedProfileId);
+      loadTelemetry(selectedProfileId, telemetryRange);
     }
-  }, [selectedProfileId, loadPatientData]);
+  }, [selectedProfileId, loadPatientData, loadTelemetry, telemetryRange]);
 
-  // Patient Discovery Search
-  const handleSearchPatients = React.useCallback(async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    setSearching(true);
-    setDiscoverFeedback(null);
+  // Handle incoming request response (Accept / Reject)
+  const handleRespondToRequest = async (requestId: string, action: "ACCEPT" | "REJECT") => {
+    setRespondingReqId(requestId);
+    setRequestFeedback(null);
+
     try {
-      const queryParam = discoverQuery.trim()
-        ? `?query=${encodeURIComponent(discoverQuery.trim())}`
-        : "";
-      const res = await fetch(`/api/patients/discover${queryParam}`);
+      const res = await fetch(`/api/caretakers/requests/${requestId}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+
       const data = await res.json();
       if (res.ok) {
-        setDiscoverResults(data.patients || []);
-        setSearchDone(true);
+        setRequestFeedback({
+          type: "success",
+          message: action === "ACCEPT" ? "Patient request accepted! Added to active patient roster." : "Patient request declined.",
+        });
+        loadIncomingRequests();
+        window.location.reload();
       } else {
-        setDiscoverFeedback({
+        setRequestFeedback({
           type: "error",
-          message: data.error || "Failed to search patients",
+          message: data.error || "Failed to respond to request.",
         });
       }
     } catch {
-      setDiscoverFeedback({
+      setRequestFeedback({
         type: "error",
-        message: "Network error while searching patients",
+        message: "Network error while responding to request.",
       });
     } finally {
-      setSearching(false);
+      setRespondingReqId(null);
     }
-  }, [discoverQuery]);
+  };
 
-  // Initial load for discover if tab opened
-  React.useEffect(() => {
-    if (mainSection === "discover" && isApproved && discoverResults.length === 0 && !searchDone) {
-      handleSearchPatients();
+  // Submit Prescription (F6)
+  const handlePrescribeMedicine = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfileId || !prescribeName.trim()) return;
+
+    setSavingPrescription(true);
+    setPrescribeFeedback(null);
+
+    const timesArray = scheduleTimes
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(t));
+
+    if (timesArray.length === 0) {
+      setPrescribeFeedback({ type: "error", message: "Enter at least one valid 24-hr schedule time (e.g. 08:00, 20:00)." });
+      setSavingPrescription(false);
+      return;
     }
-  }, [mainSection, isApproved, discoverResults.length, searchDone, handleSearchPatients]);
 
-  // Caretaker Dose Confirmation Action
+    try {
+      const res = await fetch("/api/medications", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          elderlyProfileId: selectedProfileId,
+          name: prescribeName.trim(),
+          strengthNumber: parseFloat(strengthNumber) || undefined,
+          strengthUnit,
+          strength: `${strengthNumber} ${strengthUnit}`,
+          form: medForm,
+          dosageInstructions: reason.trim() || `Take 1 ${medForm} on schedule`,
+          timesOfDay: timesArray,
+          durationDays: durationDays || 30,
+          reason: reason.trim() || undefined,
+          initialStock: initialStock || 30,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setPrescribeFeedback({ type: "success", message: `Prescribed ${prescribeName} successfully!` });
+        setPrescribeName("");
+        setReason("");
+        setShowPrescribeForm(false);
+        loadPatientData(selectedProfileId);
+      } else {
+        setPrescribeFeedback({ type: "error", message: data.error || "Failed to prescribe medication." });
+      }
+    } catch {
+      setPrescribeFeedback({ type: "error", message: "Network error while prescribing medication." });
+    } finally {
+      setSavingPrescription(false);
+    }
+  };
+
+  // Submit Daily Task (F8)
+  const handleCreateDailyTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfileId || !taskTitle.trim()) return;
+
+    setSavingDailyTask(true);
+    setTaskFeedback(null);
+
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          elderlyProfileId: selectedProfileId,
+          taskType: selectedTaskType,
+          title: taskTitle.trim(),
+          description: taskDescription.trim() || undefined,
+          priority: taskPriority,
+          durationDays: taskDurationDays === "everyday" ? null : taskDurationDays,
+          untilStopped: taskDurationDays === "everyday",
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setTaskFeedback({ type: "success", message: `Assigned task "${taskTitle}" to ${activePatient?.name}!` });
+        setTaskTitle("");
+        setTaskDescription("");
+        setShowTaskForm(false);
+        loadPatientData(selectedProfileId);
+      } else {
+        setTaskFeedback({ type: "error", message: data.error || "Failed to assign daily task." });
+      }
+    } catch {
+      setTaskFeedback({ type: "error", message: "Network error while assigning daily task." });
+    } finally {
+      setSavingDailyTask(false);
+    }
+  };
+
+  // Apply age-based suggestion preset
+  const handleSelectTaskPreset = (type: string) => {
+    setSelectedTaskType(type);
+    const suggestions = getSuggestedTaskValues(patientAge);
+
+    if (type === "walking") {
+      setTaskTitle("Walking / Mobility Exercise");
+      setTaskDescription(`${suggestions.walking.activity.replace("_", " ")} for ${suggestions.walking.durationMinutes} mins. ${suggestions.walking.notes}`);
+    } else if (type === "sleep") {
+      setTaskTitle("Sleep & Rest Schedule");
+      setTaskDescription(`Target ${suggestions.sleep.targetSleepHours}h (${suggestions.sleep.bedtime} - ${suggestions.sleep.wakeupTime}). ${suggestions.sleep.notes}`);
+    } else if (type === "sugar") {
+      setTaskTitle("Check Blood Sugar (Fasting & Post-Meal)");
+      setTaskDescription(`Check times: ${suggestions.bloodSugar.sugarTimes.join(", ")}. ${suggestions.bloodSugar.notes}`);
+    } else if (type === "bp") {
+      setTaskTitle("Check Blood Pressure (Resting)");
+      setTaskDescription(`Check times: ${suggestions.bloodPressure.bpTimes.join(", ")}. ${suggestions.bloodPressure.notes}`);
+    } else if (type === "hydration") {
+      setTaskTitle("Daily Hydration Goal");
+      setTaskDescription(`${suggestions.hydration.glassesPerDay} glasses per day. ${suggestions.hydration.notes}`);
+    } else if (type === "meals") {
+      setTaskTitle("Nutritious Meals & Diet Routine");
+      setTaskDescription(`Meals: ${suggestions.meals.mealTimes.join(", ")}. ${suggestions.meals.dietNote}`);
+    } else {
+      setTaskTitle("Daily Routine Check");
+      setTaskDescription("");
+    }
+  };
+
+  // Submit Health Condition Update (F10)
+  const handleSaveConditionUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedProfileId || !noteObservations.trim()) return;
+
+    setSavingNote(true);
+    setNoteFeedback(null);
+
+    try {
+      const res = await fetch("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          elderlyProfileId: selectedProfileId,
+          overallCondition: noteCondition,
+          observations: noteObservations.trim(),
+          quickFields: {
+            appetite,
+            mood,
+            sleepQuality,
+            painLevel,
+            mobility,
+          },
+          vitalSigns: {
+            bloodPressure: bp || undefined,
+            heartRate: pulse ? Number(pulse) : undefined,
+            bloodGlucose: sugar ? Number(sugar) : undefined,
+            temperature: temp ? Number(temp) : undefined,
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setNoteFeedback({ type: "success", message: `Published condition update for ${activePatient?.name}!` });
+        setNoteObservations("");
+        loadPatientData(selectedProfileId);
+      } else {
+        setNoteFeedback({ type: "error", message: data.error || "Failed to record condition update." });
+      }
+    } catch {
+      setNoteFeedback({ type: "error", message: "Network error while recording condition update." });
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  // Confirm dose
   const handleConfirmDose = async (doseId: string) => {
     setConfirmingDoseId(doseId);
     try {
       const res = await fetch(`/api/doses/${doseId}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          confirmationNotes: `Administered and confirmed by Caretaker ${caretakerName}`,
-        }),
+        body: JSON.stringify({ confirmationNotes: `Administered by Caretaker ${caretakerName}` }),
       });
       if (res.ok) {
-        if (selectedProfileId) {
-          loadPatientData(selectedProfileId);
-        }
+        if (selectedProfileId) loadPatientData(selectedProfileId);
       } else {
         const err = await res.json();
         alert(err.error || "Failed to confirm dose");
@@ -250,164 +510,37 @@ export function CaretakerDashboardClient({
     }
   };
 
-  // Quick task toggle
-  const handleToggleTask = async (taskId: string, currentStatus: string) => {
-    const newStatus = currentStatus === "COMPLETED" ? "PENDING" : "COMPLETED";
-    try {
-      const res = await fetch(`/api/tasks/${taskId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      if (res.ok) {
-        setPatientTasks((prev) =>
-          prev.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t))
-        );
-      }
-    } catch {
-      alert("Failed to update task status");
-    }
-  };
-
-  // Submit new clinical care note or shift handover for the active patient
-  const handleSaveNote = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedProfileId) return;
-    setSavingNote(true);
-
-    try {
-      const res = await fetch("/api/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          elderlyProfileId: selectedProfileId,
-          category,
-          title: noteTitle,
-          content: noteContent,
-          vitalSigns: {
-            bloodPressure: bp || undefined,
-            heartRate: pulse ? Number(pulse) : undefined,
-            bloodGlucose: sugar ? Number(sugar) : undefined,
-            temperature: temp ? Number(temp) : undefined,
-          },
-        }),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setPatientNotes((prev) => [data.note, ...prev]);
-        setNoteTitle("");
-        setNoteContent("");
-        setNoteSuccess(true);
-        setTimeout(() => setNoteSuccess(false), 5000);
-      } else {
-        const err = await res.json();
-        alert(err.error || "Failed to record care note");
-      }
-    } catch {
-      alert("Failed to record care note");
-    } finally {
-      setSavingNote(false);
-    }
-  };
-
-  // Submit Access Request
-  const handleSendAccessRequest = async () => {
-    if (!requestModalPatient) return;
-    setSendingRequest(true);
-    setDiscoverFeedback(null);
-    try {
-      const res = await fetch(`/api/patients/${requestModalPatient.id}/request-access`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes: requestNotes }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setDiscoverFeedback({
-          type: "success",
-          message: `Access request submitted for ${requestModalPatient.name}. The Family Administrator will review your credentials.`,
-        });
-        setDiscoverResults((prev) =>
-          prev.map((p) =>
-            p.id === requestModalPatient.id ? { ...p, hasPendingRequest: true } : p
-          )
-        );
-        setRequestModalPatient(null);
-        setRequestNotes("");
-      } else {
-        setDiscoverFeedback({
-          type: "error",
-          message: data.error || "Failed to submit request",
-        });
-      }
-    } catch {
-      setDiscoverFeedback({
-        type: "error",
-        message: "Network error while submitting access request",
-      });
-    } finally {
-      setSendingRequest(false);
-    }
-  };
-
-  const pendingTasks = patientTasks.filter((t) => t.status !== "COMPLETED");
   const takenDosesCount = doses.filter((d) => d.status === "TAKEN").length;
 
   return (
     <div className="min-h-screen bg-slate-50/70 pb-20">
-      {/* ======================================================== */}
-      {/* 0. VERIFICATION STATUS ALERT BANNER                     */}
-      {/* ======================================================== */}
-      {caretakerProfile && caretakerProfile.status !== "APPROVED" && (
-        <div className="bg-amber-500/10 border-b border-amber-300/70 px-4 py-4 sm:px-6 lg:px-8">
-          <div className="mx-auto max-w-7xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start sm:items-center space-x-3">
-              <div className="p-2 rounded-xl bg-amber-100 text-amber-800 shrink-0 mt-0.5 sm:mt-0">
-                <AlertCircle className="h-5 w-5" />
-              </div>
-              <div>
-                <h4 className="text-sm font-bold text-amber-950">
-                  {caretakerProfile.status === "REJECTED"
-                    ? "Professional License Application Declined"
-                    : "Your professional credentials are under review. Full patient access will be granted once verified."}
-                </h4>
-                <p className="text-xs text-amber-900/80 mt-0.5">
-                  {caretakerProfile.status === "REJECTED"
-                    ? `Reason: ${
-                        caretakerProfile.rejectionReason ||
-                        "Credentials could not be verified by platform compliance."
-                      } Please contact platform administration to update credentials.`
-                    : caretakerProfile.status === "UNDER_REVIEW"
-                    ? "Our clinical review board is currently validating your license and council registration. Medical telemetry and patient records remain locked until approved."
-                    : "Your license document and registration details have been submitted. Clinical telemetry and medical access are restricted until verified by the platform administrator."}
-                </p>
-              </div>
-            </div>
-            <Badge className="bg-amber-700 text-white font-bold text-xs shrink-0 self-start sm:self-auto">
-              Status: {caretakerProfile.status.replace("_", " ")}
-            </Badge>
-          </div>
-        </div>
+      {/* 0. VERIFICATION STATUS LIVE TRACKER & BANNER */}
+      {caretakerProfile && (
+        <CaretakerVerificationTracker
+          initialStatus={caretakerProfile.status}
+          profileId={caretakerProfile.id}
+        />
       )}
 
-      {/* ======================================================== */}
-      {/* 1. CARETAKER HEADER & SECTION NAVIGATION                 */}
-      {/* ======================================================== */}
+      {/* 1. HEADER & CAPACITY INDICATOR (F5) */}
       <section className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-6">
+        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 space-y-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5">
             <div>
               <div className="flex items-center space-x-2">
                 <span className="inline-flex items-center rounded-lg bg-teal-100 px-3 py-1 text-xs font-black text-teal-800 uppercase tracking-wider">
                   <ShieldCheck className="h-3.5 w-3.5 mr-1 text-teal-700" />
                   {caretakerProfile?.professionalCategory || "Licensed Caretaker / Nurse"}
                 </span>
-                <span className="text-xs font-bold text-slate-500">
-                  {caretakerProfile?.registrationNumber
-                    ? `Reg #${caretakerProfile.registrationNumber} (${caretakerProfile.state || "Active"})`
-                    : "Clinical Care & Medication Authority"}
-                </span>
+                {/* 5-Patient Cap Header Display (F5) */}
+                <Badge
+                  variant="outline"
+                  className={`font-mono font-bold text-xs ${
+                    isAtMaxCapacity ? "bg-rose-50 border-rose-300 text-rose-700" : "bg-teal-50 border-teal-300 text-teal-800"
+                  }`}
+                >
+                  Patients: {patientCount} / 5
+                </Badge>
               </div>
               <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight mt-2">
                 Welcome, {caretakerName}
@@ -426,1009 +559,719 @@ export function CaretakerDashboardClient({
               </div>
             </div>
 
-            {/* Primary Mode Switcher (My Patients vs Find Patients) */}
-            <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+            {/* Mode Switcher */}
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => setMainSection("patients")}
                 className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  mainSection === "patients"
-                    ? "bg-teal-700 text-white shadow-xs"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  mainSection === "patients" ? "bg-teal-700 text-white shadow-xs" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
                 }`}
               >
                 <User className="h-3.5 w-3.5" />
-                <span>My Assigned Patients ({profiles.length})</span>
+                <span>Assigned Patients ({patientCount})</span>
               </button>
-
               <button
                 onClick={() => setMainSection("discover")}
                 className={`flex items-center space-x-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  mainSection === "discover"
-                    ? "bg-teal-700 text-white shadow-xs"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  mainSection === "discover" ? "bg-teal-700 text-white shadow-xs" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
                 }`}
               >
                 <Search className="h-3.5 w-3.5" />
-                <span>Find Patients</span>
+                <span>Discover Directory</span>
               </button>
             </div>
           </div>
 
-          {/* If in My Patients mode: render patient switcher grid */}
-          {mainSection === "patients" && profiles.length > 0 && (
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <div>
-                  <h2 className="text-base font-black text-slate-900 tracking-tight">
-                    Assigned Senior Patients
-                  </h2>
-                  <p className="text-xs text-slate-500">
-                    Select an assigned patient to inspect telemetry, administer medications, and log care observations in strict isolation.
-                  </p>
+          {/* INCOMING PATIENT REQUESTS SECTION (F4) */}
+          {incomingRequests.length > 0 && (
+            <div className="bg-amber-50/70 border border-amber-300/80 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 text-amber-900 font-bold text-sm">
+                  <Users className="h-4 w-4 text-amber-700" />
+                  <span>Incoming Patient Assignment Requests ({incomingRequests.length})</span>
                 </div>
+                {isAtMaxCapacity && (
+                  <span className="text-[11px] font-bold text-rose-700 bg-rose-100 px-2.5 py-0.5 rounded-full">
+                    Capacity reached (5/5) — decline or revoke to accept new patients
+                  </span>
+                )}
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {profiles.map((p) => {
-                  const isSelected = p.id === selectedProfileId;
-                  return (
-                    <div
-                      key={p.id}
-                      role="button"
-                      tabIndex={0}
-                      data-testid={`caretaker-patient-${p.id}`}
-                      onClick={() => setSelectedProfileId(p.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          setSelectedProfileId(p.id);
-                        }
-                      }}
-                      className={`cursor-pointer rounded-2xl border-2 p-4 transition-all text-left flex flex-col justify-between ${
-                        isSelected
-                          ? "border-teal-600 bg-teal-50/70 shadow-md ring-3 ring-teal-500/20"
-                          : "border-slate-200 bg-white hover:border-teal-300 hover:shadow-xs"
-                      }`}
-                    >
+              {requestFeedback && (
+                <div
+                  className={`p-2.5 rounded-xl text-xs font-semibold ${
+                    requestFeedback.type === "success" ? "bg-emerald-100 text-emerald-900 border border-emerald-300" : "bg-rose-100 text-rose-900 border border-rose-300"
+                  }`}
+                >
+                  {requestFeedback.message}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {incomingRequests.map((req) => (
+                  <div key={req.id} className="bg-white rounded-xl border border-amber-200 p-3 shadow-xs space-y-2">
+                    <div className="flex items-start justify-between">
                       <div>
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center space-x-3">
-                            <div
-                              className={`flex h-11 w-11 items-center justify-center rounded-xl font-black text-base shadow-xs ${
-                                isSelected
-                                  ? "bg-teal-700 text-white"
-                                  : "bg-teal-100 text-teal-800"
-                              }`}
-                            >
-                              {p.name[0]}
-                            </div>
-                            <div>
-                              <h3 className="text-sm font-black text-slate-900 leading-snug">
-                                {p.name}
-                              </h3>
-                              {p.preferredName && p.preferredName !== p.name && (
-                                <p className="text-xs text-slate-500">
-                                  &quot;{p.preferredName}&quot;
-                                </p>
-                              )}
-                            </div>
-                          </div>
-
-                          {isSelected ? (
-                            <Badge className="bg-teal-700 text-white text-[10px] font-bold">
-                              ✓ Monitoring Active
-                            </Badge>
-                          ) : (
-                            <span className="text-xs font-bold text-teal-700 hover:underline">
-                              Select Patient →
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Emergency Contact & Conditions */}
-                        <div className="mt-3 pt-3 border-t border-slate-100 space-y-2 text-xs">
-                          {/* Latest Vitals Display */}
-                          <div className="grid grid-cols-2 gap-2 bg-slate-50 dark:bg-slate-800/60 p-2 rounded-xl">
-                            <div>
-                              <span className="text-[10px] uppercase font-bold text-slate-400 block">Sugar</span>
-                              <span className="font-extrabold text-slate-800 dark:text-slate-200">
-                                {p.latestBloodSugar || "--"}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-[10px] uppercase font-bold text-slate-400 block">Blood Pressure</span>
-                              <span className="font-extrabold text-slate-800 dark:text-slate-200">
-                                {p.latestBloodPressure || "--"}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Dose Progress & Alerts */}
-                          <div className="flex items-center justify-between text-[11px] pt-1">
-                            <span className="text-slate-500 font-medium">Today's Doses:</span>
-                            <span className="font-bold text-teal-800 dark:text-teal-400">
-                              {p.doseProgress ? `${p.doseProgress.taken} / ${p.doseProgress.total} Taken` : "0 Scheduled"}
-                            </span>
-                          </div>
-
-                          {/* Alert Badges */}
-                          {p.alertBadges && p.alertBadges.length > 0 && (
-                            <div className="flex flex-wrap gap-1 pt-1">
-                              {p.alertBadges.map((badge, idx) => (
-                                <span
-                                  key={idx}
-                                  className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                                    badge.includes("Missed") || badge.includes("Critical")
-                                      ? "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300"
-                                      : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                                  }`}
-                                >
-                                  {badge}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-
-                          {p.emergencyContactName && (
-                            <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
-                              <span>Contact:</span>
-                              <span className="font-semibold text-slate-700 dark:text-slate-300 truncate max-w-[150px]">
-                                {p.emergencyContactName}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
-                        <span className="text-slate-400">Strict Data Isolation</span>
-                        <span
-                          className={`font-black ${
-                            isSelected ? "text-teal-800" : "text-slate-400"
-                          }`}
-                        >
-                          {isSelected ? "Active View" : "Click to Switch"}
+                        <h4 className="text-sm font-black text-slate-900">{req.patientName}</h4>
+                        <span className="text-[11px] font-mono font-bold text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded">
+                          {req.patientCode || "PT-xxxx"}
                         </span>
                       </div>
+                      <span className="text-xs text-slate-500 font-medium">Age: {req.age ?? "N/A"}</span>
                     </div>
-                  );
-                })}
+
+                    <div className="text-[11px] text-slate-600 bg-slate-50 p-2 rounded-lg">
+                      <span>Family Coordinator: </span>
+                      <strong className="text-slate-900">{req.familyAdminName}</strong>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={respondingReqId === req.id}
+                        onClick={() => handleRespondToRequest(req.id, "REJECT")}
+                        className="text-xs h-7 text-slate-600 hover:text-rose-700"
+                      >
+                        Decline
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={isAtMaxCapacity || respondingReqId === req.id}
+                        onClick={() => handleRespondToRequest(req.id, "ACCEPT")}
+                        className="bg-teal-700 hover:bg-teal-800 text-white text-xs h-7 font-bold"
+                      >
+                        {respondingReqId === req.id ? "Processing..." : "Accept Request"}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
               </div>
+            </div>
+          )}
+
+          {/* Patient Switcher Grid */}
+          {mainSection === "patients" && profiles.length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
+              {profiles.map((p) => {
+                const isSelected = p.id === selectedProfileId;
+                return (
+                  <div
+                    key={p.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedProfileId(p.id)}
+                    className={`cursor-pointer rounded-2xl border-2 p-3 transition-all text-left flex flex-col justify-between ${
+                      isSelected ? "border-teal-600 bg-teal-50/70 shadow-xs ring-2 ring-teal-500/20" : "border-slate-200 bg-white hover:border-teal-300"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center space-x-2.5">
+                        <div className={`h-9 w-9 rounded-xl flex items-center justify-center font-bold text-sm ${isSelected ? "bg-teal-700 text-white" : "bg-teal-100 text-teal-800"}`}>
+                          {p.name[0]}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <h3 className="text-xs font-black text-slate-900">{p.name}</h3>
+                            {p.patientCode && (
+                              <span className="text-[10px] font-mono font-bold text-teal-800 bg-teal-100 px-1 rounded">
+                                {p.patientCode}
+                              </span>
+                            )}
+                          </div>
+                          {p.latestCondition && (
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded">
+                              {p.latestCondition}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {isSelected ? (
+                        <Badge className="bg-teal-700 text-white text-[9px] font-bold">Active</Badge>
+                      ) : (
+                        <span className="text-[10px] font-bold text-teal-700">Select →</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       </section>
 
-      {/* ======================================================== */}
-      {/* SECTION A: FIND PATIENTS (DISCOVERY & REQUESTS)          */}
-      {/* ======================================================== */}
-      {mainSection === "discover" && (
-        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-6">
-          {!isApproved ? (
-            /* Unapproved Guard */
-            <div className="rounded-3xl border-2 border-amber-200 bg-amber-50/70 p-10 text-center max-w-2xl mx-auto space-y-4">
-              <div className="h-14 w-14 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto shadow-xs">
-                <Lock className="h-7 w-7" />
-              </div>
-              <h3 className="text-xl font-black text-amber-950">
-                Professional Verification Required
-              </h3>
-              <p className="text-xs text-amber-900 leading-relaxed max-w-lg mx-auto">
-                Professional verification required before accessing patient search. In compliance with healthcare data protection standards, only certified healthcare professionals whose licenses have been reviewed and approved can discover registered senior patients and submit monitoring access requests.
-              </p>
-              <div className="pt-2">
-                <Badge className="bg-amber-600 text-white font-bold text-xs px-3 py-1">
-                  Status: {caretakerProfile?.status || "PENDING REVIEW"}
-                </Badge>
-              </div>
-            </div>
-          ) : (
-            /* Approved Caretaker Search Interface */
-            <div className="space-y-6">
-              {/* Search Toolbar */}
-              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs space-y-4">
-                <div>
-                  <h2 className="text-xl font-black text-slate-900 tracking-tight">
-                    Discover Senior Patients
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Search registered senior patients by name or ID. Public non-medical profiles allow licensed caretakers to submit monitoring access requests to the patient&apos;s Family Administrator.
-                  </p>
-                </div>
+      {/* 2. ACTIVE PATIENT CLINICAL WORKSPACE */}
+      {mainSection === "patients" && profiles.length > 0 && activePatient && (
+        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 space-y-6">
+          {/* Navigation Tabs */}
+          <div className="flex space-x-2 overflow-x-auto bg-white p-2 rounded-2xl border border-slate-200 shadow-xs">
+            {[
+              { id: "telemetry", label: "Live Telemetry", icon: Activity },
+              { id: "medications", label: `Medications (${doses.length})`, icon: Pill },
+              { id: "tasks", label: `Daily Tasks (${patientTasks.length})`, icon: ClipboardCheck },
+              { id: "notes", label: `Health Condition & Notes (${patientNotes.length})`, icon: FileText },
+              { id: "appointments", label: `Appointments (${appointments.length})`, icon: Calendar },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as ClinicalTab)}
+                  className={`flex items-center space-x-2 py-2 px-3.5 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
+                    isActive ? "bg-teal-700 text-white shadow-xs" : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{tab.label}</span>
+                </button>
+              );
+            })}
+          </div>
 
-                <form onSubmit={handleSearchPatients} className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
-                    <Input
-                      type="text"
-                      placeholder="Search by patient name, preferred name, or ID..."
-                      value={discoverQuery}
-                      onChange={(e) => setDiscoverQuery(e.target.value)}
-                      className="pl-10 text-xs h-10"
-                    />
+          {/* TAB 1: LIVE TELEMETRY & CHARTS (F14) */}
+          {activeTab === "telemetry" && (
+            <div className="space-y-4">
+              <LiveVitalCharts
+                patientId={activePatient.id}
+                patientName={activePatient.name}
+                vitals={telemetryReadings.map((r) => ({
+                  id: r.id,
+                  recordedAt: r.timestamp,
+                  bloodGlucose: r.bloodGlucose,
+                  bloodPressure: r.bloodPressure,
+                  bloodPressureSystolic: r.systolic,
+                  bloodPressureDiastolic: r.diastolic,
+                  sugarSeverity: r.sugarSeverity,
+                  bpSeverity: r.bpSeverity,
+                  authorName: r.authorName,
+                }))}
+                onRangeChange={(r) => {
+                  setTelemetryRange(r);
+                  loadTelemetry(activePatient.id, r);
+                }}
+                isLoading={loadingTelemetry}
+              />
+            </div>
+          )}
+
+          {/* TAB 2: MEDICATIONS & PRESCRIBE (F6) */}
+          {activeTab === "medications" && (
+            <div className="space-y-5">
+              {/* Prescribe Medicine Header & Toggle (F6) */}
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <Pill className="h-5 w-5 text-teal-700" />
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">Prescribed Medications</h3>
+                      <p className="text-xs text-slate-500">Manage patient regimen, stock levels, and prescribe new medications.</p>
+                    </div>
                   </div>
                   <Button
-                    type="submit"
-                    disabled={searching}
-                    className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs px-5 h-10 shadow-xs"
+                    onClick={() => setShowPrescribeForm(!showPrescribeForm)}
+                    className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs"
                   >
-                    {searching ? (
-                      <RefreshCw className="h-4 w-4 animate-spin mr-1.5" />
-                    ) : (
-                      <Search className="h-4 w-4 mr-1.5" />
-                    )}
-                    Search
+                    <Plus className="h-3.5 w-3.5 mr-1" />
+                    {showPrescribeForm ? "Close Form" : "Prescribe Medicine"}
                   </Button>
-                </form>
+                </div>
 
-                {discoverFeedback && (
-                  <div
-                    className={`rounded-xl p-3 text-xs font-semibold flex items-center justify-between ${
-                      discoverFeedback.type === "success"
-                        ? "bg-emerald-50 border border-emerald-200 text-emerald-900"
-                        : "bg-rose-50 border border-rose-200 text-rose-900"
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2">
-                      {discoverFeedback.type === "success" ? (
-                        <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                      ) : (
-                        <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
-                      )}
-                      <span>{discoverFeedback.message}</span>
-                    </div>
-                    <button
-                      onClick={() => setDiscoverFeedback(null)}
-                      className="text-xs font-bold underline"
-                    >
-                      Dismiss
-                    </button>
+                {prescribeFeedback && (
+                  <div className={`p-3 rounded-xl text-xs font-semibold ${prescribeFeedback.type === "success" ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-rose-50 text-rose-800 border border-rose-200"}`}>
+                    {prescribeFeedback.message}
                   </div>
                 )}
-              </div>
 
-              {/* Search Results */}
-              {searching ? (
-                <div className="p-12 text-center bg-white rounded-3xl border border-slate-200">
-                  <RefreshCw className="h-8 w-8 text-teal-600 animate-spin mx-auto mb-2" />
-                  <p className="text-xs font-bold text-slate-600">
-                    Searching patient directory...
-                  </p>
-                </div>
-              ) : discoverResults.length === 0 ? (
-                <div className="p-12 text-center bg-white rounded-3xl border border-slate-200">
-                  <Users className="h-10 w-10 text-slate-300 mx-auto mb-2" />
-                  <h3 className="text-sm font-bold text-slate-800">
-                    {searchDone
-                      ? "No patients match your search"
-                      : "Search to discover registered senior patients"}
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                    {searchDone
-                      ? "Try searching with a different name or leaving the search field blank to view all discoverable profiles."
-                      : "Type a patient name or click Search to browse senior profiles open for caretaker monitoring."}
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {discoverResults.map((patient) => {
-                    const isAlreadyAssigned = profiles.some((p) => p.id === patient.id);
-                    const isPending = patient.hasPendingRequest;
+                {/* Prescribe Medicine Form (F6) */}
+                {showPrescribeForm && (
+                  <form onSubmit={handlePrescribeMedicine} className="bg-slate-50/80 p-4 rounded-xl border border-slate-200 space-y-3">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-teal-900">New Clinical Prescription</h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <Label className="text-xs">Medicine Name *</Label>
+                        <Input
+                          required
+                          placeholder="Metformin"
+                          value={prescribeName}
+                          onChange={(e) => setPrescribeName(e.target.value)}
+                          className="text-xs h-8 bg-white"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Strength *</Label>
+                          <Input
+                            required
+                            type="number"
+                            placeholder="500"
+                            value={strengthNumber}
+                            onChange={(e) => setStrengthNumber(e.target.value)}
+                            className="text-xs h-8 bg-white"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Unit</Label>
+                          <select
+                            value={strengthUnit}
+                            onChange={(e: any) => setStrengthUnit(e.target.value)}
+                            className="w-full h-8 rounded-md border text-xs bg-white px-2"
+                          >
+                            <option value="mg">mg</option>
+                            <option value="mcg">mcg</option>
+                            <option value="ml">ml</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-xs">Form</Label>
+                        <select
+                          value={medForm}
+                          onChange={(e: any) => setMedForm(e.target.value)}
+                          className="w-full h-8 rounded-md border text-xs bg-white px-2"
+                        >
+                          <option value="tablet">Tablet</option>
+                          <option value="capsule">Capsule</option>
+                          <option value="syrup">Syrup</option>
+                          <option value="drops">Drops</option>
+                        </select>
+                      </div>
+                    </div>
 
-                    return (
-                      <Card
-                        key={patient.id}
-                        className="rounded-3xl border border-slate-200 bg-white p-5 shadow-xs flex flex-col justify-between hover:border-teal-300 transition-all"
-                      >
-                        <div className="space-y-3">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center space-x-3">
-                              <div className="h-11 w-11 rounded-xl bg-teal-100 text-teal-800 font-black text-base flex items-center justify-center shrink-0">
-                                {patient.name[0]}
-                              </div>
-                              <div>
-                                <h3 className="text-sm font-black text-slate-900">
-                                  {patient.name}
-                                </h3>
-                                {patient.preferredName &&
-                                  patient.preferredName !== patient.name && (
-                                    <span className="text-xs text-slate-500 block">
-                                      &quot;{patient.preferredName}&quot;
-                                    </span>
-                                  )}
-                              </div>
-                            </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <Label className="text-xs">Schedule Times (24-hr)</Label>
+                        <Input
+                          placeholder="08:00, 20:00"
+                          value={scheduleTimes}
+                          onChange={(e) => setScheduleTimes(e.target.value)}
+                          className="text-xs h-8 bg-white font-mono"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Duration (Days, 1-365)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={365}
+                          value={durationDays}
+                          onChange={(e) => setDurationDays(parseInt(e.target.value, 10) || 30)}
+                          className="text-xs h-8 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Initial Stock (Units)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={initialStock}
+                          onChange={(e) => setInitialStock(parseInt(e.target.value, 10) || 30)}
+                          className="text-xs h-8 bg-white"
+                        />
+                      </div>
+                    </div>
 
-                            {isAlreadyAssigned ? (
-                              <Badge className="bg-emerald-600 text-white text-[10px] font-bold">
-                                ✓ Assigned
-                              </Badge>
-                            ) : isPending ? (
-                              <Badge className="bg-amber-600 text-white text-[10px] font-bold">
-                                Request Pending
-                              </Badge>
-                            ) : null}
+                    <div>
+                      <Label className="text-xs">Clinical Reason & Instructions</Label>
+                      <Input
+                        placeholder="Glycemic control post breakfast and dinner"
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        className="text-xs h-8 bg-white"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setShowPrescribeForm(false)}>
+                        Cancel
+                      </Button>
+                      <Button type="submit" size="sm" disabled={savingPrescription} className="bg-teal-700 hover:bg-teal-800 text-white font-bold">
+                        {savingPrescription ? "Publishing..." : "Publish Prescription"}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Today's Doses List */}
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between text-xs text-slate-500 font-bold">
+                    <span>Today&apos;s Scheduled Doses</span>
+                    <span className="text-teal-800 bg-teal-50 px-2 py-0.5 rounded border">{takenDosesCount}/{doses.length} Administered</span>
+                  </div>
+
+                  {loadingDoses ? (
+                    <div className="p-6 text-center text-xs text-slate-400">Loading schedule...</div>
+                  ) : doses.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-500 bg-slate-50 rounded-xl">No doses scheduled for today.</div>
+                  ) : (
+                    doses.map((dose) => (
+                      <Card key={dose.id} className="p-3.5 border rounded-xl flex items-center justify-between">
+                        <div className="flex items-center space-x-3">
+                          <div className={`h-9 w-9 rounded-xl flex items-center justify-center font-bold text-xs ${dose.status === "TAKEN" ? "bg-emerald-100 text-emerald-800" : "bg-teal-100 text-teal-800"}`}>
+                            {new Date(dose.scheduledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                           </div>
-
-                          {/* Public Non-Medical Details */}
-                          <div className="rounded-xl bg-slate-50 p-3 border border-slate-100 space-y-1.5 text-xs">
-                            <div className="flex items-center justify-between text-[11px]">
-                              <span className="text-slate-500">Demographics:</span>
-                              <span className="font-bold text-slate-900">
-                                {patient.age ? `${patient.age} yrs` : "Age N/A"} •{" "}
-                                {patient.gender || "Gender N/A"}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between text-[11px]">
-                              <span className="text-slate-500">Care Circle:</span>
-                              <span className="font-bold text-teal-900 truncate max-w-[170px]">
-                                {patient.careCircleName || "Family Circle"}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between text-[11px]">
-                              <span className="text-slate-500">Coordinator:</span>
-                              <span className="font-semibold text-slate-800">
-                                {patient.familyCoordinatorName ||
-                                  patient.emergencyContactName ||
-                                  "Family Administrator"}
-                              </span>
-                            </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900">{dose.medicationName || dose.medication?.name}</h4>
+                            <p className="text-[11px] text-slate-500">{dose.strength || dose.medication?.strength} • {dose.form || dose.medication?.form}</p>
                           </div>
                         </div>
 
-                        {/* Action Area */}
-                        <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            ID: {patient.id.slice(0, 8)}...
-                          </span>
-
-                          {isAlreadyAssigned ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setSelectedProfileId(patient.id);
-                                setMainSection("patients");
-                              }}
-                              className="text-xs font-bold text-teal-700 hover:bg-teal-50"
-                            >
-                              View Records →
-                            </Button>
-                          ) : isPending ? (
-                            <span className="text-xs font-bold text-amber-700">
-                              Awaiting Approval
-                            </span>
+                        <div>
+                          {dose.status === "TAKEN" ? (
+                            <Badge className="bg-emerald-600 text-white text-[10px] font-bold">✓ Administered</Badge>
                           ) : (
                             <Button
                               size="sm"
-                              onClick={() => {
-                                setRequestModalPatient(patient);
-                                setRequestNotes("");
-                              }}
-                              className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs shadow-xs"
+                              onClick={() => handleConfirmDose(dose.id)}
+                              disabled={confirmingDoseId === dose.id}
+                              className="bg-teal-700 hover:bg-teal-800 text-white text-xs h-7 font-bold"
                             >
-                              <Send className="h-3 w-3 mr-1" />
-                              Request Access
+                              {confirmingDoseId === dose.id ? "Saving..." : "Confirm Given"}
                             </Button>
                           )}
                         </div>
                       </Card>
-                    );
-                  })}
+                    ))
+                  )}
                 </div>
-              )}
+              </div>
             </div>
           )}
-        </div>
-      )}
 
-      {/* ======================================================== */}
-      {/* SECTION B: MY PATIENTS (CLINICAL TELEMETRY & RECORDS)     */}
-      {/* ======================================================== */}
-      {mainSection === "patients" && (
-        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-8">
-          {profiles.length === 0 ? (
-            /* Empty state when no patients are assigned */
-            <div className="rounded-3xl border border-slate-200 bg-white p-12 text-center max-w-xl mx-auto space-y-4">
-              <div className="h-14 w-14 rounded-2xl bg-teal-50 text-teal-700 flex items-center justify-center mx-auto shadow-xs">
-                <Users className="h-7 w-7" />
-              </div>
-              <h2 className="text-xl font-bold text-slate-900">
-                Awaiting Patient Care Assignment
-              </h2>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Welcome, {caretakerName}. You are registered as a Licensed Caretaker / Nurse. You will see assigned patient schedules, clinical tasks, vital sign logs, and handover notes here once a family coordinator assigns you to their Care Circle or approves your access request.
-              </p>
-              <div className="pt-2">
-                <Button
-                  onClick={() => setMainSection("discover")}
-                  className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs px-6 py-2 shadow-xs"
-                >
-                  <Search className="h-3.5 w-3.5 mr-1.5" />
-                  Find Patients & Request Access
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* Clinical Health Monitor (Isolated to selected patient) */}
-              <CaretakerPatientMonitor
-                profiles={profiles}
-                activeProfileId={selectedProfileId}
-                onSelectProfile={(id) => setSelectedProfileId(id)}
-                onMedicationCreated={() => {
-                  if (selectedProfileId) loadPatientData(selectedProfileId);
-                }}
-                onTaskCreated={() => {
-                  if (selectedProfileId) loadPatientData(selectedProfileId);
-                }}
-              />
+          {/* TAB 3: DAILY TASKS (F8, F9) */}
+          {activeTab === "tasks" && (
+            <div className="space-y-5">
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <ClipboardCheck className="h-5 w-5 text-teal-700" />
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">Daily Care Tasks</h3>
+                      <p className="text-xs text-slate-500">Tasks assigned by caretaker. Senior patient completes each task daily.</p>
+                    </div>
+                  </div>
+                  <Button
+                    onClick={() => setShowTaskForm(!showTaskForm)}
+                    className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs"
+                  >
+                    <Plus className="h-3.5 w-3.5 mr-1" />
+                    {showTaskForm ? "Close Form" : "Assign Daily Task"}
+                  </Button>
+                </div>
 
-              {/* Clinical Care Management & Vitals Logging */}
-              <div className="grid gap-8 lg:grid-cols-12">
-                {/* Left Column: Clinical Records & Schedule (7 cols) */}
-                <div className="lg:col-span-7 space-y-6">
-                  {/* Navigation Tabs for Active Patient's Clinical Records */}
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs">
-                    <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3">
-                      <div className="flex items-center space-x-2">
-                        <User className="h-4 w-4 text-teal-700" />
-                        <span className="text-xs font-bold text-slate-700">
-                          Active Patient: <strong className="text-teal-900">{activePatient?.name}</strong>
-                        </span>
-                      </div>
-                      <Badge variant="outline" className="text-[10px] bg-slate-50 text-slate-600">
-                        Isolated Clinical Records
-                      </Badge>
+                {taskFeedback && (
+                  <div className={`p-3 rounded-xl text-xs font-semibold ${taskFeedback.type === "success" ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-rose-50 text-rose-800 border border-rose-200"}`}>
+                    {taskFeedback.message}
+                  </div>
+                )}
+
+                {/* Assign Task Form with Clinical Presets (F8) */}
+                {showTaskForm && (
+                  <form onSubmit={handleCreateDailyTask} className="bg-slate-50/80 p-4 rounded-xl border border-slate-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-teal-900">Select Clinical Task Type</h4>
+                      <span className="text-[10px] text-slate-500">Age: {patientAge} yrs suggestions loaded</span>
                     </div>
 
-                    <div className="flex space-x-2 overflow-x-auto">
+                    {/* Presets Grid */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       {[
-                        { id: "medications", label: `Medications (${doses.length})`, icon: Pill },
-                        { id: "tasks", label: `Care Tasks (${patientTasks.length})`, icon: ClipboardCheck },
-                        { id: "appointments", label: `Appointments (${appointments.length})`, icon: Calendar },
-                        { id: "notes", label: `Shift Logs (${patientNotes.length})`, icon: FileText },
-                      ].map((tab) => {
-                        const Icon = tab.icon;
-                        const isActive = activeTab === tab.id;
+                        { id: "walking", label: "Walking / Exercise", icon: Footprints },
+                        { id: "sleep", label: "Sleep Routine", icon: Moon },
+                        { id: "sugar", label: "Check Blood Sugar", icon: Droplets },
+                        { id: "bp", label: "Check Blood Pressure", icon: HeartPulse },
+                        { id: "hydration", label: "Hydration Goal", icon: Droplets },
+                        { id: "meals", label: "Meals & Diet", icon: Utensils },
+                        { id: "custom", label: "Custom Task", icon: ClipboardCheck },
+                      ].map((item) => {
+                        const Icon = item.icon;
+                        const isSel = selectedTaskType === item.id;
                         return (
                           <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id as ClinicalTab)}
-                            className={`flex items-center space-x-2 py-2 px-3 text-xs font-bold rounded-xl transition-all whitespace-nowrap ${
-                              isActive
-                                ? "bg-teal-700 text-white shadow-xs"
-                                : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                            key={item.id}
+                            type="button"
+                            onClick={() => handleSelectTaskPreset(item.id)}
+                            className={`p-2.5 rounded-xl border text-left flex items-center space-x-2 transition-all ${
+                              isSel ? "border-teal-600 bg-teal-100/70 text-teal-950 font-bold" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100"
                             }`}
                           >
-                            <Icon className="h-3.5 w-3.5" />
-                            <span>{tab.label}</span>
+                            <Icon className="h-4 w-4 shrink-0 text-teal-700" />
+                            <span className="text-xs truncate">{item.label}</span>
                           </button>
                         );
                       })}
                     </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                      <div>
+                        <Label className="text-xs">Task Title *</Label>
+                        <Input
+                          required
+                          value={taskTitle}
+                          onChange={(e) => setTaskTitle(e.target.value)}
+                          placeholder="e.g. 20-min Morning Walk"
+                          className="text-xs h-8 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Priority</Label>
+                        <select
+                          value={taskPriority}
+                          onChange={(e: any) => setTaskPriority(e.target.value)}
+                          className="w-full h-8 rounded-md border text-xs bg-white px-2"
+                        >
+                          <option value="LOW">Low</option>
+                          <option value="MEDIUM">Medium</option>
+                          <option value="HIGH">High</option>
+                          <option value="URGENT">Urgent</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <Label className="text-xs">Clinical Description & Details</Label>
+                      <Textarea
+                        rows={2}
+                        value={taskDescription}
+                        onChange={(e) => setTaskDescription(e.target.value)}
+                        placeholder="Notes or clinical instructions for patient"
+                        className="text-xs bg-white"
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setShowTaskForm(false)}>
+                        Cancel
+                      </Button>
+                      <Button type="submit" size="sm" disabled={savingDailyTask} className="bg-teal-700 hover:bg-teal-800 text-white font-bold">
+                        {savingDailyTask ? "Assigning..." : "Assign Task"}
+                      </Button>
+                    </div>
+                  </form>
+                )}
+
+                {/* Task List with 7-Day History and F9 Read-Only Restriction */}
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between text-xs text-slate-500 font-bold">
+                    <span>Assigned Tasks & 7-Day Completion History</span>
+                    <span className="text-slate-400 font-normal">Completed by Senior Patient Only (Read-Only for Caretaker)</span>
                   </div>
 
-                  {/* TAB 1: MEDICATIONS & TODAY'S DOSES */}
-                  {activeTab === "medications" && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <Pill className="h-5 w-5 text-teal-700" />
-                          <h3 className="text-base font-bold text-slate-900">
-                            Today&apos;s Medication Regimen for {activePatient?.name}
-                          </h3>
-                        </div>
-                        <span className="text-xs font-bold text-teal-800 bg-teal-50 px-2.5 py-1 rounded-lg border border-teal-200">
-                          {takenDosesCount}/{doses.length} Administered
-                        </span>
-                      </div>
-
-                      {loadingDoses ? (
-                        <div className="p-8 text-center text-xs text-slate-500 bg-white rounded-2xl border border-slate-200">
-                          Loading schedule...
-                        </div>
-                      ) : doses.length === 0 ? (
-                        <div className="p-8 text-center bg-white rounded-2xl border border-slate-200">
-                          <CheckCircle className="h-8 w-8 text-teal-600 mx-auto mb-2" />
-                          <p className="text-xs font-semibold text-slate-700">
-                            No medication doses scheduled for today
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {doses.map((dose) => {
-                            const isTaken = dose.status === "TAKEN";
-                            const isConfirming = confirmingDoseId === dose.id;
-                            const isAttention =
-                              dose.status === "MISSED" || dose.status === "UNCONFIRMED";
-
-                            return (
-                              <Card
-                                key={dose.id}
-                                className={`rounded-2xl border p-4 transition-all ${
-                                  isTaken
-                                    ? "bg-slate-50/70 border-slate-200 opacity-80"
-                                    : isAttention
-                                    ? "bg-amber-50/70 border-amber-300"
-                                    : "bg-white border-slate-200 shadow-xs"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-4">
-                                  <div className="flex items-center space-x-3">
-                                    <div
-                                      className={`flex h-10 w-10 items-center justify-center rounded-xl font-bold text-xs ${
-                                        isTaken
-                                          ? "bg-emerald-100 text-emerald-800"
-                                          : isAttention
-                                          ? "bg-amber-200 text-amber-900"
-                                          : "bg-teal-100 text-teal-800"
-                                      }`}
-                                    >
-                                      {new Date(dose.scheduledTime).toLocaleTimeString([], {
-                                        hour: "2-digit",
-                                        minute: "2-digit",
-                                      })}
-                                    </div>
-                                    <div>
-                                      <h4 className="text-sm font-bold text-slate-900">
-                                        {dose.medication?.name || "Medication"}
-                                      </h4>
-                                      <p className="text-xs text-slate-500">
-                                        {dose.medication?.dosage} • {dose.medication?.instructions || "Take as directed"}
-                                      </p>
-                                    </div>
-                                  </div>
-
-                                  <div>
-                                    {isTaken ? (
-                                      <Badge className="bg-emerald-600 text-white font-bold text-[10px]">
-                                        ✓ Administered
-                                      </Badge>
-                                    ) : (
-                                      <Button
-                                        size="sm"
-                                        onClick={() => handleConfirmDose(dose.id)}
-                                        disabled={isConfirming}
-                                        className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs h-8 shadow-xs"
-                                      >
-                                        {isConfirming ? "Confirming..." : "Confirm Given"}
-                                      </Button>
-                                    )}
-                                  </div>
-                                </div>
-                              </Card>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* TAB 2: CLINICAL CARE TASKS */}
-                  {activeTab === "tasks" && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <ClipboardCheck className="h-5 w-5 text-teal-700" />
-                          <h3 className="text-base font-bold text-slate-900">
-                            Daily Clinical & Nursing Tasks
-                          </h3>
-                        </div>
-                        <Badge variant="outline" className="text-xs">
-                          {pendingTasks.length} Pending
-                        </Badge>
-                      </div>
-
-                      {loadingTasks ? (
-                        <div className="p-8 text-center text-xs text-slate-500 bg-white rounded-2xl border border-slate-200">
-                          Loading care tasks...
-                        </div>
-                      ) : patientTasks.length === 0 ? (
-                        <div className="p-8 text-center bg-white rounded-2xl border border-slate-200">
-                          <CheckCircle className="h-8 w-8 text-teal-600 mx-auto mb-2" />
-                          <p className="text-xs font-semibold text-slate-700">
-                            No care tasks logged for {activePatient?.name}
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {patientTasks.map((t) => {
-                            const isDone = t.status === "COMPLETED";
-                            return (
-                              <Card
-                                key={t.id}
-                                className={`rounded-2xl border p-4 transition-all ${
-                                  isDone
-                                    ? "bg-slate-50/70 border-slate-200 opacity-70"
-                                    : "bg-white border-slate-200 shadow-xs"
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-4">
-                                  <div className="flex items-start space-x-3">
-                                    <input
-                                      type="checkbox"
-                                      checked={isDone}
-                                      onChange={() => handleToggleTask(t.id, t.status)}
-                                      className="mt-1 h-4 w-4 rounded-md border-slate-300 text-teal-600 focus:ring-teal-500"
-                                    />
-                                    <div>
-                                      <h4
-                                        className={`text-sm font-bold ${
-                                          isDone
-                                            ? "text-slate-500 line-through"
-                                            : "text-slate-900"
-                                        }`}
-                                      >
-                                        {t.title}
-                                      </h4>
-                                      {t.description && (
-                                        <p className="text-xs text-slate-500 mt-0.5">
-                                          {t.description}
-                                        </p>
-                                      )}
-                                      <div className="flex items-center space-x-2 mt-1 text-[11px] text-slate-400">
-                                        <Clock className="h-3 w-3" />
-                                        <span>
-                                          Due:{" "}
-                                          {t.dueDate
-                                            ? new Date(t.dueDate).toLocaleDateString([], {
-                                                month: "short",
-                                                day: "numeric",
-                                              })
-                                            : "Today"}
-                                        </span>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </div>
-                              </Card>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* TAB 3: APPOINTMENTS */}
-                  {activeTab === "appointments" && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <Calendar className="h-5 w-5 text-teal-700" />
-                          <h3 className="text-base font-bold text-slate-900">
-                            Upcoming Clinical & Doctor Visits
-                          </h3>
-                        </div>
-                      </div>
-
-                      {loadingAppts ? (
-                        <div className="p-8 text-center text-xs text-slate-500 bg-white rounded-2xl border border-slate-200">
-                          Loading appointments...
-                        </div>
-                      ) : appointments.length === 0 ? (
-                        <div className="p-8 text-center bg-white rounded-2xl border border-slate-200">
-                          <p className="text-xs font-semibold text-slate-600">
-                            No appointments on file for {activePatient?.name}
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {appointments.map((appt) => (
-                            <Card
-                              key={appt.id}
-                              className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs"
-                            >
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <h4 className="text-sm font-bold text-slate-900">
-                                    {appt.title}
-                                  </h4>
-                                  <p className="text-xs text-slate-500">
-                                    {appt.doctorName || "Physician"} • {appt.location || "Clinic"}
-                                  </p>
-                                </div>
-                                <div className="text-right text-xs">
-                                  <span className="font-bold text-teal-900 block">
-                                    {new Date(appt.appointmentDate).toLocaleDateString([], {
-                                      month: "short",
-                                      day: "numeric",
-                                    })}
-                                  </span>
-                                  <span className="text-slate-400 text-[11px]">
-                                    {new Date(appt.appointmentDate).toLocaleTimeString([], {
-                                      hour: "2-digit",
-                                      minute: "2-digit",
-                                    })}
-                                  </span>
-                                </div>
-                              </div>
-                            </Card>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* TAB 4: SHIFT LOGS */}
-                  {activeTab === "notes" && (
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <FileText className="h-5 w-5 text-teal-700" />
-                          <h3 className="text-base font-bold text-slate-900">
-                            Care Observations & Shift Handover Logs
-                          </h3>
-                        </div>
-                      </div>
-
-                      {loadingNotes ? (
-                        <div className="p-8 text-center text-xs text-slate-500 bg-white rounded-2xl border border-slate-200">
-                          Loading shift logs...
-                        </div>
-                      ) : patientNotes.length === 0 ? (
-                        <div className="p-8 text-center bg-white rounded-2xl border border-slate-200">
-                          <p className="text-xs font-semibold text-slate-600">
-                            No care notes recorded yet. Use the form on the right to log observations.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {patientNotes.map((note) => (
-                            <Card
-                              key={note.id}
-                              className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs space-y-2"
-                            >
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center space-x-2">
-                                  <Badge variant="outline" className="text-[10px]">
-                                    {note.category}
-                                  </Badge>
-                                  <h4 className="text-sm font-bold text-slate-900">
-                                    {note.title}
-                                  </h4>
-                                </div>
-                                <span className="text-[11px] text-slate-400">
-                                  {new Date(note.createdAt).toLocaleDateString([], {
-                                    month: "short",
-                                    day: "numeric",
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })}
-                                </span>
-                              </div>
-                              <p className="text-xs text-slate-600 leading-relaxed">
-                                {note.content}
-                              </p>
-                              {note.vitalSigns && typeof note.vitalSigns === "object" && (
-                                <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100 text-[11px] text-teal-800">
-                                  {note.vitalSigns.bloodPressure && (
-                                    <span className="bg-teal-50 px-2 py-0.5 rounded font-mono">
-                                      BP: {note.vitalSigns.bloodPressure}
-                                    </span>
-                                  )}
-                                  {note.vitalSigns.heartRate && (
-                                    <span className="bg-teal-50 px-2 py-0.5 rounded font-mono">
-                                      Pulse: {note.vitalSigns.heartRate} bpm
-                                    </span>
-                                  )}
-                                  {note.vitalSigns.bloodGlucose && (
-                                    <span className="bg-teal-50 px-2 py-0.5 rounded font-mono">
-                                      Glucose: {note.vitalSigns.bloodGlucose} mg/dL
-                                    </span>
-                                  )}
-                                  {note.vitalSigns.temperature && (
-                                    <span className="bg-teal-50 px-2 py-0.5 rounded font-mono">
-                                      Temp: {note.vitalSigns.temperature} °F
-                                    </span>
-                                  )}
-                                </div>
-                              )}
-                            </Card>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Right Column: Vitals Logger & Shift Handover Form (5 cols) */}
-                <div className="lg:col-span-5">
-                  <Card className="rounded-3xl border border-slate-200 bg-white shadow-xs sticky top-24">
-                    <CardHeader className="p-5 pb-3">
-                      <div className="flex items-center space-x-2">
-                        <Activity className="h-5 w-5 text-teal-700" />
-                        <CardTitle className="text-base font-bold text-slate-900">
-                          Log Vitals & Care Note
-                        </CardTitle>
-                      </div>
-                      <CardDescription className="text-xs text-slate-500">
-                        Record clinical observations for {activePatient?.name}.
-                      </CardDescription>
-                    </CardHeader>
-
-                    <CardContent className="p-5 pt-0">
-                      {noteSuccess && (
-                        <div className="mb-4 rounded-xl bg-emerald-50 p-3 text-xs font-bold text-emerald-800 border border-emerald-300">
-                          Care note and vital signs recorded successfully!
-                        </div>
-                      )}
-
-                      <form onSubmit={handleSaveNote} className="space-y-4">
-                        <div className="space-y-1">
-                          <Label htmlFor="note-cat">Note Category</Label>
-                          <select
-                            id="note-cat"
-                            value={category}
-                            onChange={(e) => setCategory(e.target.value)}
-                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold"
-                          >
-                            <option value="HEALTH_UPDATE">Health Update & Vitals</option>
-                            <option value="HANDOVER">Shift Handover Note</option>
-                            <option value="OBSERVATION">General Clinical Observation</option>
-                            <option value="MOOD">Mood & Mobility Check</option>
-                            <option value="INCIDENT">Incident / Note of Concern</option>
-                          </select>
-                        </div>
-
-                        <div className="space-y-1">
-                          <Label htmlFor="note-title">Title / Summary *</Label>
-                          <Input
-                            id="note-title"
-                            required
-                            placeholder="e.g. Afternoon Vitals & Meal Tolerance"
-                            value={noteTitle}
-                            onChange={(e) => setNoteTitle(e.target.value)}
-                          />
-                        </div>
-
-                        {/* Vitals 4-Grid */}
-                        <div className="rounded-xl bg-slate-50 p-3 border border-slate-200 space-y-2">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                            Vital Signs (Optional)
-                          </span>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <Label htmlFor="v-bp" className="text-[11px]">BP (mmHg)</Label>
-                              <Input
-                                id="v-bp"
-                                placeholder="120/80"
-                                value={bp}
-                                onChange={(e) => setBp(e.target.value)}
-                                className="h-8 text-xs font-mono"
-                              />
+                  {loadingTasks ? (
+                    <div className="p-6 text-center text-xs text-slate-400">Loading tasks...</div>
+                  ) : patientTasks.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-500 bg-slate-50 rounded-xl">No daily tasks currently assigned.</div>
+                  ) : (
+                    patientTasks.map((task) => (
+                      <Card key={task.id} className="p-4 border rounded-2xl bg-white shadow-xs space-y-3">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <h4 className="text-sm font-black text-slate-900">{task.title}</h4>
+                              <Badge variant="outline" className="text-[10px] uppercase">
+                                {task.priority}
+                              </Badge>
                             </div>
-                            <div>
-                              <Label htmlFor="v-sugar" className="text-[11px]">Glucose (mg/dL)</Label>
-                              <Input
-                                id="v-sugar"
-                                type="number"
-                                placeholder="110"
-                                value={sugar}
-                                onChange={(e) => setSugar(e.target.value)}
-                                className="h-8 text-xs font-mono"
-                              />
-                            </div>
-                            <div>
-                              <Label htmlFor="v-pulse" className="text-[11px]">Heart Rate (bpm)</Label>
-                              <Input
-                                id="v-pulse"
-                                type="number"
-                                placeholder="72"
-                                value={pulse}
-                                onChange={(e) => setPulse(e.target.value)}
-                                className="h-8 text-xs font-mono"
-                              />
-                            </div>
-                            <div>
-                              <Label htmlFor="v-temp" className="text-[11px]">Temp (°F)</Label>
-                              <Input
-                                id="v-temp"
-                                type="number"
-                                step="0.1"
-                                placeholder="98.6"
-                                value={temp}
-                                onChange={(e) => setTemp(e.target.value)}
-                                className="h-8 text-xs font-mono"
-                              />
-                            </div>
+                            {task.description && <p className="text-xs text-slate-600 mt-1">{task.description}</p>}
+                          </div>
+                          <div>
+                            {task.isCompleted ? (
+                              <Badge className="bg-emerald-600 text-white text-[10px] font-bold">
+                                ✓ Done today by Senior
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-amber-700 border-amber-300 text-[10px]">
+                                Pending Senior action
+                              </Badge>
+                            )}
                           </div>
                         </div>
 
-                        <div className="space-y-1">
-                          <Label htmlFor="note-content">Clinical Observation Notes *</Label>
-                          <Textarea
-                            id="note-content"
-                            required
-                            rows={3}
-                            placeholder="Document patient wellness, hydration, symptoms, appetite, or instructions for incoming caregivers..."
-                            value={noteContent}
-                            onChange={(e) => setNoteContent(e.target.value)}
-                          />
-                        </div>
-
-                        <Button
-                          type="submit"
-                          disabled={savingNote}
-                          className="w-full bg-teal-700 hover:bg-teal-800 text-white font-semibold text-xs h-10 shadow-xs"
-                        >
-                          <Send className="h-3.5 w-3.5 mr-1.5" />
-                          {savingNote ? "Recording Note..." : "Publish Care Note"}
-                        </Button>
-                      </form>
-                    </CardContent>
-                  </Card>
+                        {/* 7-Day History Chips (F8) */}
+                        {task.history && task.history.length > 0 && (
+                          <div className="pt-2 border-t border-slate-100 flex items-center gap-1.5 overflow-x-auto text-[10px]">
+                            <span className="text-slate-400 font-semibold mr-1 shrink-0">7-Day:</span>
+                            {task.history.map((h: any, i: number) => (
+                              <div
+                                key={i}
+                                title={`${h.dateFormatted}: ${h.label}`}
+                                className={`px-2 py-0.5 rounded-md font-mono shrink-0 flex items-center space-x-1 ${
+                                  h.status === "COMPLETED"
+                                    ? "bg-emerald-100 text-emerald-800 font-bold"
+                                    : "bg-slate-100 text-slate-500"
+                                }`}
+                              >
+                                <span>{h.date.slice(5)}</span>
+                                <span>{h.status === "COMPLETED" ? "✓" : "—"}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </Card>
+                    ))
+                  )}
                 </div>
               </div>
-            </>
+            </div>
           )}
-        </div>
-      )}
 
-      {/* Access Request Modal */}
-      {requestModalPatient && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center space-x-2 text-teal-800">
-                <Send className="h-5 w-5" />
-                <h3 className="text-base font-black text-slate-900">
-                  Request Monitoring Access
-                </h3>
+          {/* TAB 4: HEALTH CONDITION & NOTES (F10) */}
+          {activeTab === "notes" && (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Left: Previous Shift & Care Notes */}
+              <div className="lg:col-span-7 space-y-4">
+                <h3 className="text-sm font-bold text-slate-900">Health Condition Records & Shift Handover Logs</h3>
+                {loadingNotes ? (
+                  <div className="p-6 text-center text-xs text-slate-400">Loading notes...</div>
+                ) : patientNotes.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-slate-500 bg-white border rounded-2xl">No condition logs on record.</div>
+                ) : (
+                  patientNotes.map((n) => (
+                    <Card key={n.id} className="p-4 border rounded-2xl bg-white space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          {n.condition && (
+                            <Badge className="bg-teal-700 text-white text-[10px] font-bold">
+                              {n.condition}
+                            </Badge>
+                          )}
+                          <h4 className="text-xs font-bold text-slate-900">{n.title}</h4>
+                        </div>
+                        <span className="text-[10px] text-slate-400">
+                          {new Date(n.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-700 leading-relaxed">{n.observations || n.content}</p>
+                      {/* Quick Fields summary */}
+                      {(n.appetite || n.mood || n.sleepQuality || n.mobility) && (
+                        <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100 text-[10px] text-slate-500 font-medium">
+                          {n.appetite && <span>Appetite: <strong className="text-slate-800">{n.appetite}</strong></span>}
+                          {n.mood && <span>• Mood: <strong className="text-slate-800">{n.mood}</strong></span>}
+                          {n.sleepQuality && <span>• Sleep: <strong className="text-slate-800">{n.sleepQuality}</strong></span>}
+                          {n.mobility && <span>• Mobility: <strong className="text-slate-800">{n.mobility}</strong></span>}
+                        </div>
+                      )}
+                    </Card>
+                  ))
+                )}
               </div>
-              <button
-                onClick={() => setRequestModalPatient(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
 
-            <div className="bg-teal-50 p-3.5 rounded-2xl border border-teal-200 text-xs space-y-1">
-              <span className="font-bold text-teal-950 block text-sm">
-                {requestModalPatient.name}
-              </span>
-              <p className="text-teal-800">
-                Care Circle: <strong>{requestModalPatient.careCircleName || "Family Circle"}</strong>
-              </p>
-              <p className="text-teal-700 text-[11px]">
-                Coordinator: {requestModalPatient.familyCoordinatorName || "Family Administrator"}
-              </p>
-            </div>
+              {/* Right: Health Condition Update Form (F10) */}
+              <div className="lg:col-span-5">
+                <Card className="p-5 border rounded-3xl bg-white shadow-xs space-y-4 sticky top-24">
+                  <div className="flex items-center space-x-2">
+                    <Activity className="h-5 w-5 text-teal-700" />
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900">Health Condition Update</h3>
+                      <p className="text-[11px] text-slate-500">Record overall patient condition & observations</p>
+                    </div>
+                  </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-700">
-                Introduction / Clinical Note (Optional)
-              </label>
-              <Textarea
-                rows={3}
-                placeholder="e.g. Registered Nurse with 5 years geriatric care experience. Available for daily vitals monitoring and medication administration."
-                value={requestNotes}
-                onChange={(e) => setRequestNotes(e.target.value)}
-                className="text-xs"
-              />
-            </div>
+                  {noteFeedback && (
+                    <div className={`p-2.5 rounded-xl text-xs font-semibold ${noteFeedback.type === "success" ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-rose-50 text-rose-800 border border-rose-200"}`}>
+                      {noteFeedback.message}
+                    </div>
+                  )}
 
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setRequestModalPatient(null)}
-                disabled={sendingRequest}
-                className="text-xs"
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleSendAccessRequest}
-                disabled={sendingRequest}
-                className="bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs"
-              >
-                {sendingRequest ? "Sending Request..." : "Submit Access Request"}
-              </Button>
+                  <form onSubmit={handleSaveConditionUpdate} className="space-y-3">
+                    <div>
+                      <Label className="text-xs font-bold">Overall Health Condition *</Label>
+                      <select
+                        value={noteCondition}
+                        onChange={(e: any) => setNoteCondition(e.target.value)}
+                        className="w-full h-9 rounded-xl border border-slate-300 bg-white px-3 text-xs font-bold text-teal-900"
+                      >
+                        <option value="STABLE">Stable — No immediate clinical concern</option>
+                        <option value="IMPROVING">Improving — Positive vital trajectory</option>
+                        <option value="NEEDS_ATTENTION">Needs Attention — Guarded / Monitoring</option>
+                        <option value="CRITICAL">Critical — Urgent medical review required</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <Label className="text-xs font-bold">Clinical Observations *</Label>
+                      <Textarea
+                        required
+                        rows={3}
+                        value={noteObservations}
+                        onChange={(e) => setNoteObservations(e.target.value)}
+                        placeholder="Detailed physical observations, alertness, and symptoms..."
+                        className="text-xs"
+                      />
+                    </div>
+
+                    {/* Quick Fields */}
+                    <div className="space-y-2 pt-1 border-t border-slate-100">
+                      <Label className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Quick Clinical Fields</Label>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <Label className="text-[10px] text-slate-400">Appetite</Label>
+                          <select value={appetite} onChange={(e) => setAppetite(e.target.value)} className="w-full h-7 rounded border text-[11px] px-1 bg-white">
+                            <option value="Good">Good</option>
+                            <option value="Fair">Fair</option>
+                            <option value="Poor">Poor</option>
+                          </select>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-slate-400">Mood</Label>
+                          <select value={mood} onChange={(e) => setMood(e.target.value)} className="w-full h-7 rounded border text-[11px] px-1 bg-white">
+                            <option value="Cheerful">Cheerful</option>
+                            <option value="Calm">Calm</option>
+                            <option value="Anxious">Anxious</option>
+                            <option value="Low">Low</option>
+                          </select>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-slate-400">Sleep Quality</Label>
+                          <select value={sleepQuality} onChange={(e) => setSleepQuality(e.target.value)} className="w-full h-7 rounded border text-[11px] px-1 bg-white">
+                            <option value="Restful">Restful</option>
+                            <option value="Interrupted">Interrupted</option>
+                            <option value="Restless">Restless</option>
+                          </select>
+                        </div>
+                        <div>
+                          <Label className="text-[10px] text-slate-400">Mobility</Label>
+                          <select value={mobility} onChange={(e) => setMobility(e.target.value)} className="w-full h-7 rounded border text-[11px] px-1 bg-white">
+                            <option value="Independent">Independent</option>
+                            <option value="Assisted">Assisted</option>
+                            <option value="Bedbound">Bedbound</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    <Button type="submit" disabled={savingNote} className="w-full bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs h-9 shadow-xs">
+                      {savingNote ? "Publishing Update..." : "Publish Health Condition Update"}
+                    </Button>
+                  </form>
+                </Card>
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* TAB 5: APPOINTMENTS */}
+          {activeTab === "appointments" && (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+              <h3 className="text-sm font-bold text-slate-900">Upcoming Clinical & Doctor Visits</h3>
+              {loadingAppts ? (
+                <div className="p-6 text-center text-xs text-slate-400">Loading visits...</div>
+              ) : appointments.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-500 bg-slate-50 rounded-xl">No appointments on file.</div>
+              ) : (
+                appointments.map((appt) => (
+                  <div key={appt.id} className="p-3 border rounded-xl flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">{appt.title}</h4>
+                      <p className="text-[11px] text-slate-500">{appt.doctorName} • {appt.clinicName || appt.location}</p>
+                    </div>
+                    <span className="text-xs font-bold text-teal-800">
+                      {new Date(appt.appointmentDate).toLocaleDateString([], { month: "short", day: "numeric" })}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -140,12 +140,21 @@ function CompleteProfileContent() {
 
       if (role === "CARETAKER" && selectedFile) {
         setLoadingStage("Encrypting & storing certificate in vault...");
+
+        // Fetch short-lived upload token
+        const tokenRes = await fetch("/api/auth/upload-token").catch(() => null);
+        const tokenJson = tokenRes ? await tokenRes.json().catch(() => null) : null;
+
         const uploadForm = new FormData();
         uploadForm.append("file", selectedFile);
+        if (tokenJson?.token) {
+          uploadForm.append("uploadToken", tokenJson.token);
+        }
 
         const uploadRes = await fetch("/api/caretakers/upload-document", {
           method: "POST",
           body: uploadForm,
+          headers: tokenJson?.token ? { "x-upload-token": tokenJson.token } : {},
         });
 
         const uploadJson = await uploadRes.json();

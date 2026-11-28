@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { verifyProfileAccess } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
+import { updateMedicationStockCount } from "@/lib/services/medication-service";
 
 export async function GET(
   req: Request,
@@ -190,5 +191,51 @@ export async function DELETE(
   } catch (err: any) {
     console.error("[Medication DELETE Error]:", err);
     return NextResponse.json({ error: "Failed to archive medication" }, { status: 500 });
+  }
+}
+
+export async function PATCH(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const user = await getCurrentUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { id } = await params;
+  const med = await prisma.medication.findUnique({ where: { id } });
+  if (!med) {
+    return NextResponse.json({ error: "Medication not found" }, { status: 404 });
+  }
+
+  // Both Seniors and Caretakers with record view access can update stock
+  const access = await verifyProfileAccess(user.id, med.elderlyProfileId, "CAN_VIEW_RECORDS");
+  if (!access.authorized) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
+  try {
+    const body = await req.json();
+    const newStock = body.stockCount !== undefined ? Number(body.stockCount) : Number(body.currentStock);
+
+    if (isNaN(newStock) || newStock < 0 || newStock > 999) {
+      return NextResponse.json(
+        { error: "Stock count must be a number between 0 and 999" },
+        { status: 400 }
+      );
+    }
+
+    const updated = await updateMedicationStockCount(
+      user.id,
+      id,
+      newStock,
+      user.role.toLowerCase()
+    );
+
+    return NextResponse.json({ success: true, medication: updated });
+  } catch (err: any) {
+    console.error("[Medication PATCH Error]:", err);
+    return NextResponse.json({ error: err.message || "Failed to update stock" }, { status: 500 });
   }
 }

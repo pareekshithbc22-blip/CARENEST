@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Heart, UserPlus } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Heart, UserPlus, ShieldCheck, Check, AlertCircle } from "lucide-react";
 
 interface AddElderlyProfileModalProps {
   open: boolean;
@@ -33,13 +34,41 @@ export function AddElderlyProfileModal({
   const [isSeniorModeActive, setIsSeniorModeActive] = React.useState(true);
   const [seniorPin, setSeniorPin] = React.useState("1234");
   const [confirmPin, setConfirmPin] = React.useState("1234");
+  const [selectedCaretakerId, setSelectedCaretakerId] = React.useState<string>("");
+  const [caretakers, setCaretakers] = React.useState<any[]>([]);
+  const [loadingCaretakers, setLoadingCaretakers] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (open) {
+      setLoadingCaretakers(true);
+      fetch("/api/caretakers/discover")
+        .then((res) => res.json())
+        .then((data) => {
+          const list = data.caretakers || [];
+          setCaretakers(list);
+          const firstAvailable = list.find((c: any) => !c.isFull);
+          if (firstAvailable && !selectedCaretakerId) {
+            setSelectedCaretakerId(firstAvailable.id);
+          }
+        })
+        .catch(() => {})
+        .finally(() => setLoadingCaretakers(false));
+    }
+  }, [open, selectedCaretakerId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    // Validate caretaker selection (F3)
+    if (!selectedCaretakerId) {
+      setError("Please choose an available licensed caretaker for this senior patient.");
+      setLoading(false);
+      return;
+    }
 
     // Validate 4-digit PIN
     if (seniorPin) {
@@ -80,6 +109,7 @@ export function AddElderlyProfileModal({
           notes: notes || undefined,
           isSeniorModeActive,
           seniorPin: seniorPin || undefined,
+          caretakerId: selectedCaretakerId,
         }),
       });
 
@@ -106,7 +136,7 @@ export function AddElderlyProfileModal({
             <DialogTitle>Add Senior Patient Profile</DialogTitle>
           </div>
           <DialogDescription>
-            Register a senior patient to establish a Care Circle, assign licensed caretakers, and coordinate family care.
+            Register a senior patient, allocate sequential Patient ID, and submit a care request to a licensed caretaker.
           </DialogDescription>
         </DialogHeader>
 
@@ -117,6 +147,85 @@ export function AddElderlyProfileModal({
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4 py-2">
+          {/* CHOOSE CARETAKER SECTION (F3) */}
+          <div className="rounded-2xl border-2 border-teal-200 bg-teal-50/50 p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <ShieldCheck className="h-4 w-4 text-teal-700" />
+                <Label className="text-xs font-black text-teal-950 uppercase tracking-wider">
+                  Choose Licensed Caretaker *
+                </Label>
+              </div>
+              <span className="text-[10px] text-teal-800 font-semibold">Max 5 patients per caretaker</span>
+            </div>
+
+            {loadingCaretakers ? (
+              <p className="text-xs text-slate-500 py-2">Loading verified caretakers...</p>
+            ) : caretakers.length === 0 ? (
+              <p className="text-xs text-amber-700 bg-amber-50 p-2 rounded-lg border border-amber-200">
+                No verified caretakers currently discovered. Platform administration will assign available staff.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {caretakers.map((c) => {
+                  const isSelected = selectedCaretakerId === c.id;
+                  const isFull = c.isFull || c.currentPatientCount >= 5;
+
+                  return (
+                    <div
+                      key={c.id}
+                      onClick={() => {
+                        if (!isFull) setSelectedCaretakerId(c.id);
+                      }}
+                      className={`p-2.5 rounded-xl border text-left flex items-center justify-between transition-all ${
+                        isFull
+                          ? "opacity-50 cursor-not-allowed bg-slate-100 border-slate-200"
+                          : isSelected
+                          ? "border-teal-600 bg-white shadow-xs cursor-pointer ring-2 ring-teal-500/20"
+                          : "border-slate-200 bg-white hover:border-teal-300 cursor-pointer"
+                      }`}
+                    >
+                      <div className="flex items-center space-x-2.5">
+                        <div
+                          className={`h-7 w-7 rounded-lg flex items-center justify-center font-bold text-xs ${
+                            isSelected ? "bg-teal-700 text-white" : "bg-teal-100 text-teal-800"
+                          }`}
+                        >
+                          {isSelected ? <Check className="h-4 w-4" /> : c.name[0]}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-slate-900">{c.name}</span>
+                            {c.specialization && (
+                              <span className="text-[10px] text-teal-800 bg-teal-50 px-1.5 py-0.2 rounded font-medium">
+                                {c.specialization}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            {c.yearsOfExperience ? `${c.yearsOfExperience} yrs exp • ` : ""}{c.backgroundSummary || "Licensed Healthcare Professional"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div>
+                        {isFull ? (
+                          <Badge variant="outline" className="text-[10px] bg-rose-50 border-rose-300 text-rose-700">
+                            Fully booked
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] bg-emerald-50 border-emerald-300 text-emerald-800 font-mono">
+                            {c.currentPatientCount} of 5 ({c.availableSlots} free)
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1">
               <Label htmlFor="prof-name">Full Name *</Label>
@@ -190,7 +299,7 @@ export function AddElderlyProfileModal({
             <Label htmlFor="prof-cond">Medical Diagnoses / Chronic Conditions</Label>
             <Input
               id="prof-cond"
-              placeholder="Hypertension, Type 2 Diabetes, Mild Cognitive Impairment (comma separated)"
+              placeholder="Hypertension, Type 2 Diabetes (comma separated)"
               value={medicalConditions}
               onChange={(e) => setMedicalConditions(e.target.value)}
             />
@@ -200,7 +309,7 @@ export function AddElderlyProfileModal({
             <Label htmlFor="prof-allergies">Known Drug & Environmental Allergies</Label>
             <Input
               id="prof-allergies"
-              placeholder="Penicillin, Sulfa drugs, Latex (comma separated)"
+              placeholder="Penicillin, Sulfa drugs (comma separated)"
               value={allergies}
               onChange={(e) => setAllergies(e.target.value)}
             />
@@ -291,10 +400,6 @@ export function AddElderlyProfileModal({
                 <p className="text-[10px] text-slate-400">Must match the 4-digit PIN above</p>
               </div>
             </div>
-
-            <div className="mt-2 text-[11px] text-teal-800 bg-teal-50/70 border border-teal-200 rounded-lg p-2 flex items-center space-x-1.5">
-              <span>Automatic Caretaker Assignment: An active licensed caretaker will be allocated to this circle upon creation.</span>
-            </div>
           </div>
 
           <div className="space-y-1">
@@ -322,7 +427,7 @@ export function AddElderlyProfileModal({
               className="bg-teal-700 hover:bg-teal-800 text-white font-bold"
             >
               <UserPlus className="h-4 w-4 mr-2" />
-              {loading ? "Adding Patient..." : "Add Senior Patient"}
+              {loading ? "Adding Patient..." : "Add Senior Patient & Send Request"}
             </Button>
           </DialogFooter>
         </form>

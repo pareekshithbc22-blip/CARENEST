@@ -3,13 +3,46 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { RegisterSchema } from "@/lib/validations";
 import { requestEmailOtp } from "@/lib/otp";
+import { intakeVerification } from "@/lib/services/verification-service";
+import {
+  checkPersistentRateLimit,
+  recordPersistentFailedAttempt,
+  resetPersistentRateLimit,
+} from "@/lib/services/rate-limit-service";
 
 export async function POST(req: Request) {
+  const clientIp =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip") ||
+    "127.0.0.1";
+
   try {
+    const rateStatus = await checkPersistentRateLimit({
+      action: "REGISTER",
+      identifier: clientIp,
+      ip: clientIp,
+    });
+
+    if (!rateStatus.allowed) {
+      return NextResponse.json(
+        {
+          error: `Too many registration attempts from this network. Please try again in ${Math.ceil(
+            (rateStatus.remainingSeconds || 1800) / 60
+          )} minutes.`,
+        },
+        { status: 429 }
+      );
+    }
+
     const body = await req.json();
     const validated = RegisterSchema.safeParse(body);
 
     if (!validated.success) {
+      await recordPersistentFailedAttempt({
+        action: "REGISTER",
+        identifier: clientIp,
+        ip: clientIp,
+      });
       const firstIssue = validated.error.issues[0];
       const userMessage = firstIssue ? firstIssue.message : "Validation failed. Please check your details.";
       return NextResponse.json(
@@ -209,12 +242,22 @@ export async function POST(req: Request) {
       });
     }
 
+    // Start automated verification pipeline for Caretakers
+    if (role === "CARETAKER") {
+      const ctProfile = await prisma.caretakerProfile.findUnique({
+        where: { userId: user.id },
+      });
+      if (ctProfile) {
+        try {
+          await intakeVerification(ctProfile.id, user.id);
+        } catch (intakeErr: any) {
+          console.warn("[Register Verification Intake Warning]:", intakeErr.message);
+        }
+      }
+    }
+
     // Send 6-digit Email OTP immediately
-    const ip =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      req.headers.get("x-real-ip") ||
-      undefined;
-    const otpResult = await requestEmailOtp(normalizedEmail, name, ip);
+    const otpResult = await requestEmailOtp(normalizedEmail, name, clientIp);
 
     if (!otpResult.success) {
       return NextResponse.json(
@@ -225,6 +268,9 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+
+    // Reset rate limiter upon successful account registration
+    await resetPersistentRateLimit("REGISTER", clientIp, clientIp);
 
     return NextResponse.json(
       {

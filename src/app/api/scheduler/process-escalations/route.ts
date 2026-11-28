@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/session";
 import { processDoseEscalations } from "@/lib/escalation/service";
+import { verifyCronSecret } from "@/lib/security";
 
 /**
  * Protected Cloud Scheduler Endpoint
@@ -8,17 +9,19 @@ import { processDoseEscalations } from "@/lib/escalation/service";
  * Supports Authorization: Bearer <CRON_SECRET> or authenticated Admin session.
  */
 export async function POST(req: Request) {
-  const cronSecret = process.env.CRON_SECRET;
   const authHeader = req.headers.get("authorization");
+  const providedBearer = authHeader?.replace(/^Bearer\s+/i, "");
 
   let isAuthorized = false;
 
-  if (cronSecret && authHeader === `Bearer ${cronSecret}`) {
+  // Verify CRON_SECRET in constant-time (fails closed if CRON_SECRET is not configured)
+  if (providedBearer && verifyCronSecret(providedBearer)) {
     isAuthorized = true;
   } else {
-    // Alternatively allow signed-in admin session
+    // Alternatively allow signed-in admin session only.
+    // Note: FAMILY role is explicitly excluded from triggering backend schedulers.
     const currentUser = await getCurrentUser();
-    if (currentUser && (currentUser.role === "ADMIN" || currentUser.role === "FAMILY")) {
+    if (currentUser && currentUser.role === "ADMIN") {
       isAuthorized = true;
     }
   }

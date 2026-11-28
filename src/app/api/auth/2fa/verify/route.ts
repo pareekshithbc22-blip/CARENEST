@@ -9,6 +9,12 @@ import {
   resetTwoFactorRateLimit,
   verifyAndConsumeRecoveryCode,
 } from "@/lib/totp";
+import { recordTwoFactorVerification } from "@/lib/security";
+import {
+  checkPersistentRateLimit,
+  recordPersistentFailedAttempt,
+  resetPersistentRateLimit,
+} from "@/lib/services/rate-limit-service";
 
 export async function POST(req: Request) {
   try {
@@ -17,12 +23,30 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Unauthorized session" }, { status: 401 });
     }
 
-    // Rate-limiting check
+    // Database-backed persistent rate-limiting check
+    const persistentLimit = await checkPersistentRateLimit({
+      action: "TOTP_VERIFY",
+      identifier: user.id,
+    });
+    if (!persistentLimit.allowed) {
+      return NextResponse.json(
+        {
+          error: `Too many failed 2FA attempts. For your security, this account is temporarily locked. Please try again in ${Math.ceil(
+            (persistentLimit.remainingSeconds || 300) / 60
+          )} minutes.`,
+        },
+        { status: 429 }
+      );
+    }
+
+    // In-memory rate-limiting fallback check
     const rateStatus = checkTwoFactorRateLimit(user.id);
     if (rateStatus.locked) {
       return NextResponse.json(
         {
-          error: `Too many failed 2FA attempts. For your security, this account is temporarily locked. Please try again in ${rateStatus.remainingMinutes || 5} minutes.`,
+          error: `Too many failed 2FA attempts. For your security, this account is temporarily locked. Please try again in ${
+            rateStatus.remainingMinutes || 5
+          } minutes.`,
         },
         { status: 429 }
       );
@@ -65,8 +89,12 @@ export async function POST(req: Request) {
       );
 
       if (!valid) {
-        const attemptResult = recordFailedTwoFactorAttempt(user.id);
-        const attemptsLeft = attemptResult.attemptsRemaining;
+        recordFailedTwoFactorAttempt(user.id);
+        const persistentAttempt = await recordPersistentFailedAttempt({
+          action: "TOTP_VERIFY",
+          identifier: user.id,
+        });
+        const attemptsLeft = persistentAttempt.attemptsRemaining;
         return NextResponse.json(
           {
             error: `Invalid recovery code. ${attemptsLeft} ${attemptsLeft === 1 ? "attempt" : "attempts"} remaining before temporary lockout.`,
@@ -83,6 +111,9 @@ export async function POST(req: Request) {
       });
 
       resetTwoFactorRateLimit(user.id);
+      await resetPersistentRateLimit("TOTP_VERIFY", user.id);
+      // Record server-side 2FA session verification in database
+      await recordTwoFactorVerification(user.id, (user as any).tokenId);
 
       return NextResponse.json({
         success: true,
@@ -104,8 +135,12 @@ export async function POST(req: Request) {
     const isValid = verifyTotp(plainSecret, code, 1);
 
     if (!isValid) {
-      const attemptResult = recordFailedTwoFactorAttempt(user.id);
-      const attemptsLeft = attemptResult.attemptsRemaining;
+      recordFailedTwoFactorAttempt(user.id);
+      const persistentAttempt = await recordPersistentFailedAttempt({
+        action: "TOTP_VERIFY",
+        identifier: user.id,
+      });
+      const attemptsLeft = persistentAttempt.attemptsRemaining;
       return NextResponse.json(
         {
           error: `Incorrect 6-digit code. ${attemptsLeft} ${attemptsLeft === 1 ? "attempt" : "attempts"} remaining before temporary lockout.`,
@@ -117,6 +152,9 @@ export async function POST(req: Request) {
 
     // Verification succeeded
     resetTwoFactorRateLimit(user.id);
+    await resetPersistentRateLimit("TOTP_VERIFY", user.id);
+    // Record server-side 2FA session verification in database
+    await recordTwoFactorVerification(user.id, (user as any).tokenId);
 
     return NextResponse.json({
       success: true,

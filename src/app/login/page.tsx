@@ -4,10 +4,11 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
-import { Heart, KeyRound, Mail, Lock, ShieldCheck } from "lucide-react";
+import { Heart, KeyRound, Mail, Lock, ShieldCheck, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { normalizePatientId } from "@/lib/domain/patient-code";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -16,6 +17,7 @@ export default function LoginPage() {
   const [mode, setMode] = React.useState<"email" | "pin">("email");
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
   const [pin, setPin] = React.useState("");
   const [patientIdentifier, setPatientIdentifier] = React.useState("");
   const [loading, setLoading] = React.useState(false);
@@ -63,6 +65,7 @@ export default function LoginPage() {
     });
 
     if (res?.error) {
+      setShowPassword(false);
       if (res.error === "EMAIL_NOT_VERIFIED" || res.error.includes("EMAIL_NOT_VERIFIED")) {
         router.push(`/register?step=otp&email=${encodeURIComponent(email.trim())}`);
         return;
@@ -147,16 +150,29 @@ export default function LoginPage() {
     setLoading(true);
     setError(null);
 
+    const normalizedId = normalizePatientId(patientIdentifier);
+    if (!normalizedId) {
+      setError("Patient ID or PIN is incorrect");
+      setLoading(false);
+      return;
+    }
+
     const res = await signIn("credentials", {
       pin,
-      patientIdentifier: patientIdentifier.trim() || undefined,
+      patientIdentifier: normalizedId,
       redirect: false,
     });
 
     if (res?.error) {
-      setError(
-        "Invalid Senior PIN or patient identifier. Please verify your 4-digit PIN with your family guardian."
-      );
+      if (res.error.includes("RATE_LIMIT_LOCKED")) {
+        const parts = res.error.split("RATE_LIMIT_LOCKED:");
+        const mins = parts[1] ? parseInt(parts[1], 10) : 15;
+        setError(
+          `Too many failed attempts. Account temporarily locked. Please try again in ${isNaN(mins) ? 15 : mins} minutes.`
+        );
+      } else {
+        setError("Patient ID or PIN is incorrect");
+      }
       setLoading(false);
     } else {
       router.push("/dashboard/senior");
@@ -288,13 +304,22 @@ export default function LoginPage() {
                     <Lock className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
                     <Input
                       id="password"
-                      type="password"
+                      type={showPassword ? "text" : "password"}
                       required
                       placeholder="••••••••••••"
-                      className="pl-9"
+                      className="pl-9 pr-10"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                      className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-teal-500 rounded p-0.5"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      aria-pressed={showPassword}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
                 </div>
 
@@ -315,21 +340,25 @@ export default function LoginPage() {
                 </div>
                 <h3 className="text-base font-black text-slate-900">Senior Patient PIN Login</h3>
                 <p className="text-xs text-slate-500">
-                  Enter the 4-digit PIN registered by your family guardian.
+                  Enter your Patient ID and 4-digit PIN.
                 </p>
               </div>
 
               <div className="space-y-1">
                 <Label htmlFor="patient-id" className="text-xs font-semibold text-slate-700">
-                  Patient Phone or Name (Optional if PIN is unique)
+                  Patient ID
                 </Label>
                 <Input
                   id="patient-id"
-                  placeholder="e.g. Eleanor or registered phone"
-                  className="h-10 text-xs"
+                  placeholder="PT-0001"
+                  required
+                  className="h-10 text-xs font-mono uppercase"
                   value={patientIdentifier}
                   onChange={(e) => setPatientIdentifier(e.target.value)}
                 />
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Ask your family administrator for your Patient ID
+                </p>
               </div>
 
               <div className="space-y-1">
@@ -340,6 +369,7 @@ export default function LoginPage() {
                   <Input
                     id="senior-pin"
                     type="password"
+                    inputMode="numeric"
                     maxLength={4}
                     pattern="[0-9]{4}"
                     required

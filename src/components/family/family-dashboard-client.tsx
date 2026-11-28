@@ -19,6 +19,7 @@ import {
   AlertCircle,
   CheckCircle2,
   Check,
+  Copy,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,7 @@ export interface ManagedSeniorSummary {
   id: string;
   name: string;
   preferredName?: string | null;
+  patientCode?: string | null;
   dateOfBirth?: string | null;
   gender?: string | null;
   bloodGroup?: string | null;
@@ -107,6 +109,7 @@ export function FamilyDashboardClient({
 }: FamilyDashboardClientProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = React.useState<FamilyTab>("overview");
+  const [copiedCode, setCopiedCode] = React.useState<string | null>(null);
 
   // Caretaker Requests & Management state
   const [caretakerRequests, setCaretakerRequests] = React.useState<any[]>([]);
@@ -129,32 +132,73 @@ export function FamilyDashboardClient({
     }
   }, []);
 
-  const [todayDoses, setTodayDoses] = React.useState<any[]>([]);
-  const [loadingTodayDoses, setLoadingTodayDoses] = React.useState(false);
+  // Consolidated Doses & Caretaker Program states (Resolving Stale Doses Root Cause)
+  const [doses, setDoses] = React.useState<any[]>([]);
+  const [loadingDoses, setLoadingDoses] = React.useState(true);
+  const [caretakerTasks, setCaretakerTasks] = React.useState<any[]>([]);
+  const [caretakerNotes, setCaretakerNotes] = React.useState<any[]>([]);
+  const [unreadTabs, setUnreadTabs] = React.useState<{ tasks: boolean; medications: boolean; notes: boolean }>({
+    tasks: false,
+    medications: false,
+    notes: false,
+  });
+  const [activeCaretakerTab, setActiveCaretakerTab] = React.useState<"tasks" | "medicines" | "notes">("tasks");
 
-  const loadTodayDoses = React.useCallback(async (pid: string) => {
-    if (!pid) return;
-    setLoadingTodayDoses(true);
+  const loadDoses = React.useCallback(async (pid?: string) => {
+    const idToLoad = pid || profile?.id;
+    if (!idToLoad) {
+      setDoses([]);
+      setLoadingDoses(false);
+      return;
+    }
+    setLoadingDoses(true);
     try {
-      const res = await fetch(`/api/doses?profileId=${encodeURIComponent(pid)}&filter=today`);
+      const res = await fetch(`/api/doses?profileId=${encodeURIComponent(idToLoad)}&filter=today`);
       if (res.ok) {
         const data = await res.json();
-        setTodayDoses(data.doses || []);
+        setDoses(data.doses || []);
       }
     } catch {
       // quiet fail
     } finally {
-      setLoadingTodayDoses(false);
+      setLoadingDoses(false);
     }
-  }, []);
+  }, [profile?.id]);
+
+  const loadCaretakerData = React.useCallback(async (pid?: string) => {
+    const idToLoad = pid || profile?.id;
+    if (!idToLoad) return;
+    try {
+      const [tRes, nRes, uRes] = await Promise.all([
+        fetch(`/api/tasks?profileId=${encodeURIComponent(idToLoad)}&withHistory=true`),
+        fetch(`/api/notes?profileId=${encodeURIComponent(idToLoad)}`),
+        fetch(`/api/unread?profileId=${encodeURIComponent(idToLoad)}`),
+      ]);
+      if (tRes.ok) {
+        const t = await tRes.json();
+        setCaretakerTasks(t.tasks || []);
+      }
+      if (nRes.ok) {
+        const n = await nRes.json();
+        setCaretakerNotes(n.notes || []);
+      }
+      if (uRes.ok) {
+        const u = await uRes.json();
+        setUnreadTabs(u.unread || { tasks: false, medications: false, notes: false });
+      }
+    } catch {
+      // quiet fail
+    }
+  }, [profile?.id]);
 
   // Automatic Polling for Family Role
   const { lastUpdated, isRefreshing, refreshNow } = useDashboardPolling({
     role: "family",
     onUpdate: () => {
       if (profile?.id) {
-        loadTodayDoses(profile.id);
+        loadDoses(profile.id);
         loadCaretakerRequests();
+        loadCaretakerData(profile.id);
       }
     },
   });
@@ -162,9 +206,26 @@ export function FamilyDashboardClient({
   React.useEffect(() => {
     loadCaretakerRequests();
     if (profile?.id) {
-      loadTodayDoses(profile.id);
+      loadDoses(profile.id);
+      loadCaretakerData(profile.id);
     }
-  }, [loadCaretakerRequests, loadTodayDoses, profile?.id]);
+  }, [loadCaretakerRequests, loadDoses, loadCaretakerData, profile?.id]);
+
+  const handleSwitchCaretakerTab = async (tab: "tasks" | "medicines" | "notes") => {
+    setActiveCaretakerTab(tab);
+    if (profile?.id) {
+      setUnreadTabs((prev) => ({ ...prev, [tab]: false }));
+      try {
+        await fetch("/api/unread", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profileId: profile.id, tab }),
+        });
+      } catch {
+        // quiet fail
+      }
+    }
+  };
 
   const handleRespondCaretakerRequest = async (
     requestId: string,
@@ -236,37 +297,8 @@ export function FamilyDashboardClient({
   const [isEscalating, setIsEscalating] = React.useState(false);
   const [escalationFeedback, setEscalationFeedback] = React.useState<string | null>(null);
 
-  // Today's Doses state for active senior
-  const [doses, setDoses] = React.useState<any[]>([]);
-  const [loadingDoses, setLoadingDoses] = React.useState(true);
-
   // Reference for scrolling to patient list
   const memberListRef = React.useRef<HTMLDivElement>(null);
-
-  // Fetch today's doses for the currently active senior
-  const activeProfileId = profile?.id;
-  const loadDoses = React.useCallback(async () => {
-    if (!activeProfileId) {
-      setDoses([]);
-      setLoadingDoses(false);
-      return;
-    }
-    try {
-      const res = await fetch(`/api/doses?profileId=${activeProfileId}&filter=today`);
-      if (res.ok) {
-        const data = await res.json();
-        setDoses(data.doses || []);
-      }
-    } catch {
-      // ignore network transient
-    } finally {
-      setLoadingDoses(false);
-    }
-  }, [activeProfileId]);
-
-  React.useEffect(() => {
-    loadDoses();
-  }, [loadDoses]);
 
   // Quick dose confirmation from family portal (read-only verification)
   const handleConfirmDose = async (doseId: string) => {
@@ -533,6 +565,33 @@ export function FamilyDashboardClient({
                                   &quot;{senior.preferredName}&quot;
                                 </p>
                               )}
+                              {senior.patientCode && (
+                                <div className="mt-1 flex items-center gap-1.5">
+                                  <span className="font-mono text-[11px] font-bold text-teal-800 bg-teal-100/70 px-1.5 py-0.5 rounded border border-teal-200">
+                                    ID: {senior.patientCode}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    title="Copy Patient ID"
+                                    aria-label="Copy Patient ID"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (senior.patientCode) {
+                                        navigator.clipboard.writeText(senior.patientCode);
+                                        setCopiedCode(senior.patientCode);
+                                        setTimeout(() => setCopiedCode((prev) => (prev === senior.patientCode ? null : prev)), 2000);
+                                      }
+                                    }}
+                                    className="text-slate-400 hover:text-teal-700 p-0.5 rounded transition-colors"
+                                  >
+                                    {copiedCode === senior.patientCode ? (
+                                      <Check className="h-3.5 w-3.5 text-teal-600" />
+                                    ) : (
+                                      <Copy className="h-3.5 w-3.5" />
+                                    )}
+                                  </button>
+                                </div>
+                              )}
                             </div>
                           </div>
 
@@ -549,18 +608,48 @@ export function FamilyDashboardClient({
 
                         {/* Caretaker Assignment Status */}
                         <div className="mt-4 pt-3 border-t border-slate-100 space-y-1.5 text-xs">
-                          <div className="flex items-center justify-between">
-                            <span className="text-slate-500 font-medium">Assigned Caretaker:</span>
-                            {senior.caretaker ? (
-                              <span className="font-bold text-slate-900">
-                                {senior.caretaker.name}
-                              </span>
-                            ) : (
-                              <Badge variant="warning" className="text-[10px] font-bold">
-                                Caretaker Pending Assignment
-                              </Badge>
-                            )}
-                          </div>
+                          {(() => {
+                            const pendingReq = caretakerRequests.find((r) => r.elderlyProfileId === senior.id && r.status === "PENDING");
+                            return (
+                              <div className="flex items-center justify-between">
+                                <span className="text-slate-500 font-medium">Assigned Caretaker:</span>
+                                {senior.caretaker ? (
+                                  <span className="font-bold text-slate-900">
+                                    {senior.caretaker.name}
+                                  </span>
+                                ) : pendingReq ? (
+                                  <div className="flex items-center gap-1.5">
+                                    <Badge variant="warning" className="text-[10px] font-bold">
+                                      Awaiting approval
+                                    </Badge>
+                                    <Button
+                                      size="xs"
+                                      variant="ghost"
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        try {
+                                          const res = await fetch(`/api/family/caretaker-requests/${pendingReq.id}/cancel`, { method: "POST" });
+                                          if (res.ok) {
+                                            loadCaretakerRequests();
+                                            router.refresh();
+                                          }
+                                        } catch {
+                                          alert("Failed to cancel request");
+                                        }
+                                      }}
+                                      className="h-5 px-1.5 text-[10px] text-rose-700 hover:bg-rose-50"
+                                    >
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <Badge variant="outline" className="text-[10px] text-slate-500">
+                                    No Caretaker Assigned
+                                  </Badge>
+                                )}
+                              </div>
+                            );
+                          })()}
 
                           {senior.caretaker && (
                             <div className="flex items-center justify-between text-[11px]">
@@ -667,6 +756,32 @@ export function FamilyDashboardClient({
                     <span className="text-xs font-semibold text-slate-500">
                       (&quot;{profile.preferredName}&quot;)
                     </span>
+                  )}
+                  {profile.patientCode && (
+                    <div className="flex items-center gap-1.5 ml-1">
+                      <span className="font-mono text-xs font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded-lg border border-teal-200">
+                        Patient ID: {profile.patientCode}
+                      </span>
+                      <button
+                        type="button"
+                        title="Copy Patient ID"
+                        aria-label="Copy Patient ID"
+                        onClick={() => {
+                          if (profile.patientCode) {
+                            navigator.clipboard.writeText(profile.patientCode);
+                            setCopiedCode(profile.patientCode);
+                            setTimeout(() => setCopiedCode((prev) => (prev === profile.patientCode ? null : prev)), 2000);
+                          }
+                        }}
+                        className="text-slate-400 hover:text-teal-700 p-0.5 rounded transition-colors"
+                      >
+                        {copiedCode === profile.patientCode ? (
+                          <Check className="h-3.5 w-3.5 text-teal-600" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -966,11 +1081,13 @@ export function FamilyDashboardClient({
                     {doses.map((dose) => {
                       const isTaken = dose.status === "TAKEN";
                       const isSkipped = dose.status === "SKIPPED";
-                      const isMissed = dose.status === "MISSED" || dose.status === "UNCONFIRMED";
+                      const isMissed = dose.status === "MISSED";
+                      const isOverdue = !isTaken && !isSkipped && !isMissed && new Date(dose.scheduledAt).getTime() + 15 * 60000 < Date.now();
                       const timeStr = new Date(dose.scheduledAt).toLocaleTimeString([], {
                         hour: "2-digit",
                         minute: "2-digit",
                       });
+                      const takenByStr = dose.takenBy ? `(by ${dose.takenBy})` : "(by patient)";
 
                       return (
                         <div
@@ -981,34 +1098,50 @@ export function FamilyDashboardClient({
                               : isSkipped
                               ? "border-slate-200 bg-slate-50/70"
                               : isMissed
+                              ? "border-rose-200 bg-rose-50/60"
+                              : isOverdue
                               ? "border-amber-300 bg-amber-50/60"
                               : "border-slate-200 bg-white"
                           }`}
                         >
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                             <div className="space-y-1">
-                              <div className="flex items-center space-x-2">
+                              <div className="flex flex-wrap items-center gap-2">
                                 <span className="font-mono text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">
                                   {timeStr}
                                 </span>
-                                {isTaken && <Badge variant="success" className="text-[10px]">Taken</Badge>}
-                                {isSkipped && <Badge className="bg-slate-200 text-slate-700 text-[10px]">Skipped</Badge>}
-                                {isMissed && <Badge variant="warning" className="text-[10px]">Missed</Badge>}
-                                {!isTaken && !isSkipped && !isMissed && <Badge variant="outline" className="text-[10px]">Pending</Badge>}
+                                {isTaken && (
+                                  <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px] font-bold">
+                                    Taken at {new Date(dose.confirmedAt || dose.scheduledAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} {takenByStr}
+                                  </Badge>
+                                )}
+                                {isSkipped && (
+                                  <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px] font-bold">
+                                    Skipped ({dose.confirmationNotes?.replace("Skipped: ", "") || "Clinically skipped"})
+                                  </Badge>
+                                )}
+                                {isMissed && (
+                                  <Badge className="bg-rose-100 text-rose-800 border-rose-300 text-[10px] font-bold">
+                                    Missed
+                                  </Badge>
+                                )}
+                                {isOverdue && (
+                                  <Badge className="bg-rose-50 text-rose-700 border-rose-200 text-[10px] font-bold">
+                                    Overdue
+                                  </Badge>
+                                )}
+                                {!isTaken && !isSkipped && !isMissed && !isOverdue && (
+                                  <Badge variant="outline" className="text-[10px] text-slate-600">
+                                    Pending
+                                  </Badge>
+                                )}
                               </div>
                               <h4 className="text-sm font-bold text-slate-900 pt-0.5">
-                                {dose.medication.name} ({dose.medication.strength})
+                                {dose.medication?.name || dose.medicationName} ({dose.medication?.strength || dose.strength})
                               </h4>
                               <p className="text-xs text-slate-600">
-                                {dose.medication.dosageInstructions}
+                                {dose.medication?.dosageInstructions || "Take on schedule"}
                               </p>
-                              {dose.confirmedAt && (
-                                <p className="text-[11px] text-slate-500 pt-0.5 font-medium">
-                                  {isTaken ? "Confirmed taken at " : isSkipped ? "Marked skipped at " : "Recorded at "}
-                                  {new Date(dose.confirmedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                                  {dose.confirmationNotes ? ` (${dose.confirmationNotes})` : ""}
-                                </p>
-                              )}
                             </div>
 
                             {!isTaken && !isSkipped && (
@@ -1076,6 +1209,190 @@ export function FamilyDashboardClient({
                   ))}
                 </div>
               </div>
+            </div>
+
+            {/* F11: Caretaker Assigned Program (Tasks, Medicines, Care Notes) */}
+            <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+                <div className="flex items-center space-x-2.5">
+                  <div className="p-2 rounded-xl bg-teal-100 text-teal-800">
+                    <ShieldCheck className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">
+                      Care Program Assigned by Caretaker
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Clinical tasks, prescribed medicines, and health condition notes assigned by authorized caretakers.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Subtabs for Tasks, Medicines, Notes */}
+                <div className="inline-flex rounded-xl border bg-slate-100 p-1 text-xs font-bold self-start sm:self-auto">
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchCaretakerTab("tasks")}
+                    className={`relative px-3 py-1.5 rounded-lg transition-all flex items-center space-x-1.5 ${
+                      activeCaretakerTab === "tasks" ? "bg-white text-teal-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    <span>Tasks ({caretakerTasks.length})</span>
+                    {unreadTabs.tasks && (
+                      <span className="h-2 w-2 rounded-full bg-rose-500" title="Unread updates" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchCaretakerTab("medicines")}
+                    className={`relative px-3 py-1.5 rounded-lg transition-all flex items-center space-x-1.5 ${
+                      activeCaretakerTab === "medicines" ? "bg-white text-teal-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    <span>Medicines ({medications.length})</span>
+                    {unreadTabs.medications && (
+                      <span className="h-2 w-2 rounded-full bg-rose-500" title="Unread updates" />
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchCaretakerTab("notes")}
+                    className={`relative px-3 py-1.5 rounded-lg transition-all flex items-center space-x-1.5 ${
+                      activeCaretakerTab === "notes" ? "bg-white text-teal-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                    }`}
+                  >
+                    <span>Care Notes ({caretakerNotes.length})</span>
+                    {unreadTabs.notes && (
+                      <span className="h-2 w-2 rounded-full bg-rose-500" title="Unread updates" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Subtab 1: Tasks */}
+              {activeCaretakerTab === "tasks" && (
+                <div className="space-y-3">
+                  {caretakerTasks.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-6">No daily care tasks assigned by caretaker yet.</p>
+                  ) : (
+                    caretakerTasks.map((task) => (
+                      <div key={task.id} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/60 space-y-2">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <h4 className="text-sm font-bold text-slate-900">{task.title}</h4>
+                              <Badge variant="outline" className="text-[10px] uppercase font-mono">{task.priority}</Badge>
+                            </div>
+                            {task.description && <p className="text-xs text-slate-600 mt-1">{task.description}</p>}
+                          </div>
+                          <div>
+                            {task.isCompleted ? (
+                              <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px] font-bold">
+                                ✓ Done today by Senior
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-amber-700 border-amber-300 text-[10px]">
+                                Pending Senior action
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+
+                        {task.history && task.history.length > 0 && (
+                          <div className="pt-2 border-t border-slate-200/60 flex items-center gap-1.5 overflow-x-auto text-[10px]">
+                            <span className="text-slate-400 font-semibold mr-1 shrink-0">7-Day:</span>
+                            {task.history.map((h: any, i: number) => (
+                              <div
+                                key={i}
+                                title={`${h.dateFormatted}: ${h.label}`}
+                                className={`px-2 py-0.5 rounded-md font-mono shrink-0 flex items-center space-x-1 ${
+                                  h.status === "COMPLETED" ? "bg-emerald-100 text-emerald-800 font-bold" : "bg-slate-200/70 text-slate-500"
+                                }`}
+                              >
+                                <span>{h.date.slice(5)}</span>
+                                <span>{h.status === "COMPLETED" ? "✓" : "—"}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Subtab 2: Medicines */}
+              {activeCaretakerTab === "medicines" && (
+                <div className="space-y-3">
+                  {medications.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-6">No prescribed medicines assigned by caretaker yet.</p>
+                  ) : (
+                    medications.map((med: any) => {
+                      const stockVal = med.stockCount ?? med.stock?.currentStock ?? 0;
+                      const isLow = stockVal <= 5;
+                      return (
+                        <div key={med.id} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/60 flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center space-x-2">
+                              <h4 className="text-sm font-bold text-slate-900">{med.name}</h4>
+                              <span className="text-xs text-slate-500 font-medium">({med.strength})</span>
+                              {isLow ? (
+                                <Badge className="bg-rose-100 text-rose-800 border-rose-300 text-[10px] font-bold">Low stock</Badge>
+                              ) : (
+                                <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">In stock</Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-600 mt-0.5">{med.dosageInstructions || "Take as directed"}</p>
+                            {med.assignedBy && (
+                              <p className="text-[11px] text-teal-800 font-medium mt-1">Prescribed by {med.assignedBy.name}</p>
+                            )}
+                          </div>
+                          <div className="text-right">
+                            <span className="font-mono text-xs font-bold text-slate-900 block">{stockVal} {med.stock?.unit || "units"} left</span>
+                            <span className="text-[10px] text-slate-400">Current inventory</span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {/* Subtab 3: Care Notes */}
+              {activeCaretakerTab === "notes" && (
+                <div className="space-y-3">
+                  {caretakerNotes.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-6">No care notes or condition updates logged by caretaker yet.</p>
+                  ) : (
+                    caretakerNotes.map((note: any) => (
+                      <div key={note.id} className="p-4 rounded-2xl border border-slate-100 bg-slate-50/60 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            {note.condition && (
+                              <Badge className="bg-teal-700 text-white text-[10px] font-bold">{note.condition}</Badge>
+                            )}
+                            <h4 className="text-xs font-bold text-slate-900">{note.title}</h4>
+                          </div>
+                          <span className="text-[10px] text-slate-400">
+                            {new Date(note.createdAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-700 leading-relaxed">{note.observations || note.content}</p>
+                        {(note.appetite || note.mood || note.sleepQuality || note.mobility) && (
+                          <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-200/60 text-[10px] text-slate-500 font-medium">
+                            {note.appetite && <span>Appetite: <strong className="text-slate-800">{note.appetite}</strong></span>}
+                            {note.mood && <span>• Mood: <strong className="text-slate-800">{note.mood}</strong></span>}
+                            {note.sleepQuality && <span>• Sleep: <strong className="text-slate-800">{note.sleepQuality}</strong></span>}
+                            {note.mobility && <span>• Mobility: <strong className="text-slate-800">{note.mobility}</strong></span>}
+                          </div>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

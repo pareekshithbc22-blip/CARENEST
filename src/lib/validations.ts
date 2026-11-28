@@ -52,6 +52,7 @@ export const ProfileCreateSchema = z.object({
   isSeniorModeActive: z.boolean().default(true),
   seniorPin: z.string().regex(/^\d{4}$/, "PIN must be exactly 4 numeric digits").optional().nullable(),
   confirmPin: z.string().optional().nullable(),
+  caretakerId: z.string().optional().nullable(),
 });
 
 export const MedicationCreateSchema = z.object({

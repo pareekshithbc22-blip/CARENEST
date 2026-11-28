@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { prisma } from "../src/lib/prisma";
+import { prisma } from "../lib/prisma";
 
 describe("CareNest Schema and Domain Integrity", () => {
   it("verifies Prisma Client is configured and database models are properly initialized", async () => {
@@ -13,5 +13,8 @@ describe("CareNest Schema and Domain Integrity", () => {
     expect(prisma.notification).toBeDefined();
     expect(prisma.caretakerProfile).toBeDefined();
     expect(prisma.patientAccessRequest).toBeDefined();
+    // Security hardening additive models
+    expect(prisma.userSession).toBeDefined();
+    expect(prisma.rateLimitBucket).toBeDefined();
   });
 });

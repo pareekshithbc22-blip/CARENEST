@@ -149,6 +149,7 @@ export default async function FamilyDashboardPage({
         id: p.id,
         name: p.name,
         preferredName: p.preferredName,
+        patientCode: p.patientCode,
         dateOfBirth: p.dateOfBirth ? p.dateOfBirth.toISOString() : null,
         age: getAge(p.dateOfBirth),
         gender: p.gender,
